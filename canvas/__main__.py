@@ -1,0 +1,51 @@
+"""Canvas — Hyprland infinite desktop.
+
+Usage:
+    canvasd          Start the panning daemon
+    canvas-ctl CMD   Send command to daemon
+"""
+
+import sys
+
+
+def daemon_main() -> None:
+    """Entry point for `canvasd`."""
+    from canvas.daemon import run
+
+    run()
+
+
+def ctl_main() -> None:
+    """Entry point for `canvas-ctl`."""
+    from canvas.ipc import send_command
+
+    if len(sys.argv) < 2:
+        cmds = "pan-start|pan-stop|nav-left|nav-right|toggle|canvas-toggle|ping|status"
+        print(f"Usage: canvas-ctl <{cmds}>", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = sys.argv[1].upper().replace("-", "_")
+    valid = {
+        "PAN_START",
+        "PAN_STOP",
+        "NAV_LEFT",
+        "NAV_RIGHT",
+        "TOGGLE",
+        "CANVAS_TOGGLE",
+        "PING",
+        "STATUS",
+    }
+    if cmd not in valid:
+        print(f"Unknown command: {sys.argv[1]}", file=sys.stderr)
+        sys.exit(1)
+
+    response = send_command(cmd)
+    if response:
+        print(response)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "daemon":
+        daemon_main()
+    else:
+        ctl_main()

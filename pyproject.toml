@@ -1,0 +1,24 @@
+[project]
+name = "hyprland-canvas"
+version = "0.1.0"
+description = "Infinite canvas for Hyprland — pan floating windows like an infinite desktop"
+requires-python = ">=3.12"
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+canvasd = "canvas.__main__:daemon_main"
+canvas-ctl = "canvas.__main__:ctl_main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.13",
+]

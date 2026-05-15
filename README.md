@@ -1,0 +1,137 @@
+# hyprland-canvas
+
+Infinite canvas for Hyprland — pan all floating windows like an infinite desktop.
+
+Drag the canvas with **SUPER+SHIFT+LMB**, navigate between windows, toggle canvas mode per workspace. Runs as an unprivileged user daemon — communicates directly with Hyprland via its IPC socket and Lua API.
+
+## Why
+
+Hyprland has no built-in infinite desktop. This daemon provides one by communicating with Hyprland the right way:
+
+- **Direct Unix socket IPC** to Hyprland (~0.1ms per frame) — no subprocess overhead
+- **Hyprland Lua API** (`hl.dsp.window.move`) moves windows without focusing them — no cursor warp or flicker
+- Runs as an unprivileged user daemon — no special permissions needed
+- Has a **Unix socket IPC** for keyboard-driven commands (navigate, toggle, invert)
+
+## Features
+
+| Feature | Keybind | Description |
+|---------|---------|-------------|
+| Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
+| Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
+| Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
+| Invert | SUPER+SHIFT+G | Invert pan direction |
+
+## Install
+
+```bash
+git clone https://github.com/4bstr4ct/hyprland-canvas.git
+cd hyprland-canvas
+
+# with uv (recommended)
+uv tool install .
+
+# or with pip
+pip install .
+```
+
+This gives you two commands:
+- `canvasd` — the daemon
+- `canvas-ctl` — send commands to the daemon
+
+## Usage
+
+### 1. Start the daemon
+
+```bash
+canvasd
+```
+
+### 2. Add Hyprland keybinds
+
+Hyprland 0.55+ uses Lua for config. Add these binds:
+
+```lua
+-- Canvas: pan (mouse binds)
+hl.key.bind({"SUPER", "SHIFT"}, "mouse:272", function()
+    os.execute("canvas-ctl pan-start")
+end, { mouse = true })
+
+hl.key.bind({"SUPER", "SHIFT"}, "mouse:272", function()
+    os.execute("canvas-ctl pan-stop")
+end, { mouse = true, release = true })
+
+-- Canvas: navigation
+hl.key.bind({"SUPER", "SHIFT"}, "left", function()
+    os.execute("canvas-ctl nav-left")
+end)
+hl.key.bind({"SUPER", "SHIFT"}, "right", function()
+    os.execute("canvas-ctl nav-right")
+end)
+
+-- Canvas: toggle & invert
+hl.key.bind({"SUPER", "SHIFT"}, "C", function()
+    os.execute("canvas-ctl canvas-toggle")
+end)
+hl.key.bind({"SUPER", "SHIFT"}, "G", function()
+    os.execute("canvas-ctl toggle")
+end)
+```
+
+### 3. Control commands
+
+```bash
+canvas-ctl ping              # check if daemon is running
+canvas-ctl status            # show pan direction and state
+canvas-ctl pan-start         # start panning (called by mouse bind)
+canvas-ctl pan-stop          # stop panning (called by mouse release bind)
+canvas-ctl nav-left          # navigate to previous window
+canvas-ctl nav-right         # navigate to next window
+canvas-ctl canvas-toggle     # toggle floating on current workspace
+canvas-ctl toggle            # invert pan direction
+```
+
+## Configuration
+
+Default config is bundled at `config.yml`. Override in `~/.config/canvas/config.yml`:
+
+```yaml
+speed: 1.6                    # pan speed multiplier
+invert:
+  enabled: false              # start with inverted pan direction
+navigation:
+  cooldown: 0.2               # seconds between nav commands
+  protected_apps:             # these windows are skipped during navigation
+    - brave-browser
+    - chromium
+    - firefox
+```
+
+## Architecture
+
+```
+canvasd (daemon)
+├── hypr.py        Direct Unix socket IPC to Hyprland
+├── panning.py     Cursor polling, inverse delta, idle timeout
+├── navigation.py  Window navigation, canvas toggle
+├── ipc.py         Unix socket server for canvas-ctl
+├── config.py      YAML config with deep merge
+└── daemon.py      Main loop, wires modules together
+```
+
+Key design decisions:
+
+- **Cursor polling** — reads cursor position from Hyprland IPC, works on any Wayland setup
+- **`hl.dsp.window.move({window=w})` without focus** — passing a window object bypasses auto-focus, so no cursor warp or feedback loop
+- **Direct socket IPC** — one persistent socket connection instead of spawning a subprocess every frame
+- **Idle timeout** (500ms) — auto-stops panning if Hyprland drops a mouse release event during active drag
+
+## Requirements
+
+- Hyprland 0.55+ (Lua config with `hl.*` API)
+- Python 3.12+
+- PyYAML
+
+## License
+
+MIT
