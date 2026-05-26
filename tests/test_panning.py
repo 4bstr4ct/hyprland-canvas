@@ -138,3 +138,29 @@ def test_is_dragging_property():
     assert state.is_dragging is True
     state.stop_pan()
     assert state.is_dragging is False
+
+
+def test_max_speed_clamps_step():
+    """max_speed caps per-frame cursor delta, not total."""
+    state = PanningState(speed=1.0, max_speed=10)
+    state.start_pan()
+
+    state.update_cursor(0, 0)
+    state.update_cursor(100, 100)  # would be -100,-100 but clamped to -10,-10
+
+    dx, dy = state.get_total_delta()
+    assert dx == -10
+    assert dy == -10
+
+
+def test_max_speed_none_no_clamp():
+    """max_speed=None means no clamping."""
+    state = PanningState(speed=1.0, max_speed=None)
+    state.start_pan()
+
+    state.update_cursor(0, 0)
+    state.update_cursor(100, 100)
+
+    dx, dy = state.get_total_delta()
+    assert dx == -100
+    assert dy == -100

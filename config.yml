@@ -2,6 +2,7 @@
 # Copy to ~/.config/canvas/config.yml and customize
 
 speed: 1.6
+# max_speed: 50              # optional: cap per-frame cursor delta (pixels)
 
 navigation:
   cooldown: 0.2              # seconds between navigation steps
@@ -18,4 +19,4 @@ navigation:
     - microsoft-edge
 
 invert:
-  enabled: false             # start with normal direction
+  enabled: true               # true = grab canvas (intuitive), false = follow cursor

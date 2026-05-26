@@ -9,6 +9,7 @@ import yaml
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "speed": 1.6,
+    "max_speed": None,
     "navigation": {
         "cooldown": 0.2,
         "protected_apps": [
@@ -25,7 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ],
     },
     "invert": {
-        "enabled": False,
+        "enabled": True,
     },
 }
 

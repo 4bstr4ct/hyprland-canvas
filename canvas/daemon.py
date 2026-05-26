@@ -43,7 +43,7 @@ def run() -> None:
     log.info("loading config...")
 
     # --- Initialize modules ---
-    state = PanningState(speed=cfg["speed"])
+    state = PanningState(speed=cfg["speed"], max_speed=cfg.get("max_speed"))
     state.inverted = cfg["invert"]["enabled"]
 
     navigator = Navigator(

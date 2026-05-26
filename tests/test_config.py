@@ -15,7 +15,7 @@ def test_load_default_config_when_no_file():
     # Navigation defaults from DEFAULT_CONFIG still apply
     assert cfg["navigation"]["cooldown"] == 0.2
     assert "firefox" in cfg["navigation"]["protected_apps"]
-    assert cfg["invert"]["enabled"] is False
+    assert cfg["invert"]["enabled"] is True
 
 
 def test_load_partial_config_merges_defaults():
