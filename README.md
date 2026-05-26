@@ -18,6 +18,7 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Feature | Keybind | Description |
 |---------|---------|-------------|
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
+| Edge-scroll | SUPER+LMB | Drag a window to screen edge — camera follows |
 | Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
@@ -61,6 +62,16 @@ hl.key.bind({"SUPER", "SHIFT"}, "mouse:272", function()
     os.execute("canvas-ctl pan-stop")
 end, { mouse = true, release = true })
 
+-- Canvas: edge-scroll (drag window to screen edge → camera follows)
+hl.bind("SUPER + mouse:272", function()
+    hl.dispatch(hl.dsp.window.drag())
+    hl.exec_cmd("canvas-ctl edge-start")
+end, { mouse = true })
+
+hl.bind("SUPER + mouse:272", function()
+    hl.exec_cmd("canvas-ctl edge-stop")
+end, { mouse = true, release = true })
+
 -- Canvas: navigation
 hl.key.bind({"SUPER", "SHIFT"}, "left", function()
     os.execute("canvas-ctl nav-left")
@@ -89,6 +100,8 @@ canvas-ctl nav-left          # navigate to previous window
 canvas-ctl nav-right         # navigate to next window
 canvas-ctl canvas-toggle     # toggle floating on current workspace
 canvas-ctl toggle            # invert pan direction
+canvas-ctl edge-start       # start edge-scroll (called by mouse bind)
+canvas-ctl edge-stop        # stop edge-scroll (called by mouse release bind)
 ```
 
 ## Configuration
@@ -99,6 +112,10 @@ Default config is bundled at `config.yml`. Override in `~/.config/canvas/config.
 speed: 1.6                    # pan speed multiplier
 invert:
   enabled: false              # start with inverted pan direction
+edge_scroll:
+  enabled: true               # auto-pan when dragging window near screen edge
+  threshold: 50               # pixels from edge to activate
+  speed: 20.0                 # max px/frame at edge (~1200 px/s at 60fps)
 navigation:
   cooldown: 0.2               # seconds between nav commands
   protected_apps:             # these windows are skipped during navigation
@@ -112,7 +129,7 @@ navigation:
 ```
 canvasd (daemon)
 ├── hypr.py        Direct Unix socket IPC to Hyprland
-├── panning.py     Cursor polling, inverse delta, idle timeout
+├── panning.py     Cursor polling, pan state, edge-scroll state
 ├── navigation.py  Window navigation, canvas toggle
 ├── ipc.py         Unix socket server for canvas-ctl
 ├── config.py      YAML config with deep merge
