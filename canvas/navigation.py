@@ -100,6 +100,13 @@ class Navigator:
             return "CANVAS_ON"
 
     def _set_all_floating(self, workspace_id: int, floating: bool) -> None:
+        """Toggle all windows on workspace to floating or tiled.
+
+        When floating=True (make all floating): queries non-floating windows
+        via { floating = false } filter, then toggles each → they become floating.
+        When floating=False (make all tiled): queries floating windows
+        via { floating = true } filter, then toggles each → they become tiled.
+        """
         try:
             ws_id = _safe_int(workspace_id, "workspace_id")
             fl = "false" if floating else "true"
