@@ -1,16 +1,38 @@
 """Canvas daemon — main loop wiring all modules together."""
 
+import json
 import logging
 import threading
 import time
 
 from canvas.config import load
-from canvas.hypr import eval_lua
+from canvas.hypr import eval_lua, send
 from canvas.ipc import IpcServer
 from canvas.navigation import Navigator
 from canvas.panning import PanningState, cursor_poller
 
 log = logging.getLogger("canvas")
+
+
+def _fetch_floating_baselines() -> dict[str, tuple[int, int]]:
+    """Fetch current positions of all floating windows as baseline.
+
+    Returns {address: (x, y)} for absolute positioning during pan.
+    """
+    try:
+        resp = send("j/clients")
+        clients = json.loads(resp)
+        baselines = {}
+        for w in clients:
+            if w.get("floating"):
+                addr = w.get("address", "")
+                at = w.get("at", [0, 0])
+                if addr and len(at) >= 2:
+                    baselines[addr] = (at[0], at[1])
+        return baselines
+    except Exception as e:
+        log.warning("fetch baselines failed: %s", e)
+        return {}
 
 
 def run() -> None:
@@ -29,11 +51,16 @@ def run() -> None:
         cooldown=cfg["navigation"]["cooldown"],
     )
 
+    baselines: dict[str, tuple[int, int]] = {}
+
     # --- IPC handler ---
     def handle_ipc(cmd: str) -> str:
+        nonlocal baselines
         if cmd == "PAN_START":
+            baselines = _fetch_floating_baselines()
             return state.start_pan()
         elif cmd == "PAN_STOP":
+            baselines = {}
             state.stop_pan()
             return "PAN_OFF"
         elif cmd == "NAV_LEFT":
@@ -71,27 +98,45 @@ def run() -> None:
 
     # --- Main loop (~60 FPS) ---
     try:
+        prev_total = (0, 0)
         while True:
             time.sleep(0.016)
 
             # Auto-stop panning when cursor idle (fallback for unreliable release binds)
             state.check_idle_timeout()
 
-            dx, dy = state.consume_delta()
-            if dx == 0 and dy == 0:
+            if not state.pan_active:
+                prev_total = (0, 0)
                 continue
 
-            # Move all floating windows WITHOUT focusing them.
-            # window.move({window=obj}) works with get_windows objects.
-            # No focus = no cursor warp = no feedback loop = no flicker.
+            total_dx, total_dy = state.get_total_delta()
+            if total_dx == 0 and total_dy == 0:
+                continue
+            if (total_dx, total_dy) == prev_total:
+                continue
+            prev_total = (total_dx, total_dy)
+
+            # Move all floating windows to absolute positions from baseline.
+            # Each frame independently computes position = baseline + total_delta,
+            # so rounding errors from previous frames do NOT accumulate.
             try:
-                lua = f"""
-local ws = hl.get_windows({{ floating = true }})
-for _, w in ipairs(ws) do
-    hl.dispatch(hl.dsp.window.move({{ x = {dx}, y = {dy}, relative = true, window = w }}))
-end
-"""
-                eval_lua(lua)
+                lines = ["local ws = hl.get_windows({ floating = true })"]
+                lines.append("local bd = {")
+                for addr, (bx, by) in baselines.items():
+                    lines.append(f'  ["{addr}"] = {{{bx}, {by}}},')
+                lines.append("}")
+                lines.append("for _, w in ipairs(ws) do")
+                lines.append("  local b = bd[tostring(w.address)]")
+                lines.append("  if b then")
+                lines.append(
+                    f"    hl.dispatch(hl.dsp.window.move({{"
+                    f" x = b[1] + {total_dx},"
+                    f" y = b[2] + {total_dy},"
+                    f" relative = false, window = w }}))"
+                )
+                lines.append("  end")
+                lines.append("end")
+                eval_lua("\n".join(lines))
             except Exception as e:
                 log.warning("window move failed: %s", e)
 

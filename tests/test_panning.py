@@ -18,27 +18,27 @@ def test_stop_pan_deactivates():
 
 
 def test_cursor_delta_accumulates_when_panning():
-    """When panning, cursor movement produces inverted delta."""
+    """When panning, cursor movement produces inverted total delta."""
     state = PanningState(speed=1.0)
     state.start_pan()
 
     state.update_cursor(100, 100)
     state.update_cursor(110, 105)
 
-    dx, dy = state.consume_delta()
+    dx, dy = state.get_total_delta()
     assert dx == -10
     assert dy == -5
 
 
 def test_cursor_delta_applies_speed():
-    """Delta is multiplied by speed."""
+    """Total delta is multiplied by speed."""
     state = PanningState(speed=2.0)
     state.start_pan()
 
     state.update_cursor(100, 100)
     state.update_cursor(110, 105)
 
-    dx, dy = state.consume_delta()
+    dx, dy = state.get_total_delta()
     assert dx == -20
     assert dy == -10
 
@@ -52,7 +52,7 @@ def test_cursor_delta_applies_invert():
     state.update_cursor(100, 100)
     state.update_cursor(110, 105)
 
-    dx, dy = state.consume_delta()
+    dx, dy = state.get_total_delta()
     assert dx == 10
     assert dy == 5
 
@@ -64,56 +64,60 @@ def test_no_delta_when_not_panning():
     state.update_cursor(100, 100)
     state.update_cursor(110, 105)
 
-    dx, dy = state.consume_delta()
+    dx, dy = state.get_total_delta()
     assert dx == 0
     assert dy == 0
 
 
-def test_consume_resets_accumulator():
-    """consume_delta resets accumulator to zero."""
+def test_total_delta_is_running_total():
+    """get_total_delta returns running total, not per-frame delta."""
     state = PanningState(speed=1.0)
     state.start_pan()
 
     state.update_cursor(100, 100)
     state.update_cursor(110, 105)
 
-    dx1, dy1 = state.consume_delta()
-    dx2, dy2 = state.consume_delta()
+    dx1, dy1 = state.get_total_delta()
     assert dx1 == -10
     assert dy1 == -5
-    assert dx2 == 0
-    assert dy2 == 0
+
+    state.update_cursor(120, 110)
+
+    dx2, dy2 = state.get_total_delta()
+    assert dx2 == -20
+    assert dy2 == -10
 
 
-def test_delta_clamped():
-    """Delta is clamped to _MAX_DELTA."""
-    state = PanningState(speed=100.0)
+def test_get_total_delta_does_not_reset():
+    """get_total_delta does not reset the accumulator."""
+    state = PanningState(speed=1.0)
     state.start_pan()
 
-    state.update_cursor(0, 0)
     state.update_cursor(100, 100)
+    state.update_cursor(110, 105)
 
-    dx, dy = state.consume_delta()
-    assert abs(dx) <= state._MAX_DELTA
-    assert abs(dy) <= state._MAX_DELTA
+    dx1, dy1 = state.get_total_delta()
+    dx2, dy2 = state.get_total_delta()
+    assert dx1 == dx2
+    assert dy1 == dy2
 
 
-def test_consume_zeros_overshoot():
-    """consume_delta zeros accumulator completely, no catch-up after clamping."""
-    state = PanningState(speed=10.0)
+def test_total_delta_accumulates_multiple_moves():
+    """Multiple cursor movements accumulate into total delta."""
+    state = PanningState(speed=1.0)
     state.start_pan()
 
-    state.update_cursor(0, 0)
-    state.update_cursor(100, 0)  # acc = -1000, clamped to -50
+    state.update_cursor(100, 100)
+    state.update_cursor(110, 100)  # +10 right
+    state.update_cursor(100, 100)  # -10 left (back to start)
 
-    dx1, dy1 = state.consume_delta()
-    assert dx1 == -state._MAX_DELTA  # clamped
-    dx2, dy2 = state.consume_delta()
-    assert dx2 == 0  # no leftover "catch-up"
+    dx, dy = state.get_total_delta()
+    assert dx == 0
+    assert dy == 0
 
 
-def test_stop_pan_clears_accumulator():
-    """stop_pan clears any accumulated delta."""
+def test_stop_pan_clears_total():
+    """stop_pan clears total delta."""
     state = PanningState(speed=1.0)
     state.start_pan()
 
@@ -121,7 +125,7 @@ def test_stop_pan_clears_accumulator():
     state.update_cursor(110, 105)
 
     state.stop_pan()
-    dx, dy = state.consume_delta()
+    dx, dy = state.get_total_delta()
     assert dx == 0
     assert dy == 0
 

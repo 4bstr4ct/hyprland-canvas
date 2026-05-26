@@ -2,8 +2,8 @@
 
 Architecture:
 - Poll cursor position via Hyprland IPC (canvas.hypr module)
-- When pan_active, compute inverse delta and apply to floating windows
-- Suppress + set_baseline prevent feedback loop during window moves
+- When pan_active, accumulate total delta from cursor movement
+- Daemon uses absolute positioning (baseline + total_delta) to avoid drift
 - PAN_START/PAN_STOP controlled by Hyprland keybinds
 """
 
@@ -17,9 +17,14 @@ log = logging.getLogger("canvas.panning")
 
 
 class PanningState:
-    """Thread-safe panning state with cursor delta tracking."""
+    """Thread-safe panning state with total delta tracking.
 
-    _MAX_DELTA = 50
+    Instead of consuming incremental deltas (which accumulate rounding
+    errors), we track the total offset from the start position. The
+    daemon uses this with baseline window positions for absolute moves,
+    eliminating drift.
+    """
+
     _IDLE_TIMEOUT = 0.5  # auto-stop after 500ms without cursor movement
 
     def __init__(self, speed: float = 1.0):
@@ -29,8 +34,8 @@ class PanningState:
 
         self._prev_x: int | None = None
         self._prev_y: int | None = None
-        self._acc_x = 0.0
-        self._acc_y = 0.0
+        self._total_dx = 0.0
+        self._total_dy = 0.0
         self._last_move_time: float = 0.0
 
         self._lock = threading.Lock()
@@ -61,8 +66,8 @@ class PanningState:
             self._pan_active = True
             self._prev_x = None
             self._prev_y = None
-            self._acc_x = 0.0
-            self._acc_y = 0.0
+            self._total_dx = 0.0
+            self._total_dy = 0.0
             self._last_move_time = time.monotonic()
             return "PAN_ON"
 
@@ -72,11 +77,11 @@ class PanningState:
             self._pan_active = False
             self._prev_x = None
             self._prev_y = None
-            self._acc_x = 0.0
-            self._acc_y = 0.0
+            self._total_dx = 0.0
+            self._total_dy = 0.0
 
     def update_cursor(self, x: int, y: int) -> None:
-        """Feed cursor position. If panning, accumulate inverse delta."""
+        """Feed cursor position. If panning, accumulate total delta."""
         with self._lock:
             if not self._pan_active:
                 self._prev_x = x
@@ -88,8 +93,8 @@ class PanningState:
                 dy = y - self._prev_y
                 if dx != 0 or dy != 0:
                     sign = 1 if self._inverted else -1
-                    self._acc_x += dx * self.speed * sign
-                    self._acc_y += dy * self.speed * sign
+                    self._total_dx += dx * self.speed * sign
+                    self._total_dy += dy * self.speed * sign
                     self._last_move_time = time.monotonic()
 
             self._prev_x = x
@@ -102,22 +107,20 @@ class PanningState:
                 self._pan_active = False
                 self._prev_x = None
                 self._prev_y = None
-                self._acc_x = 0.0
-                self._acc_y = 0.0
+                self._total_dx = 0.0
+                self._total_dy = 0.0
                 return True
             return False
 
-    def consume_delta(self) -> tuple[int, int]:
-        """Return accumulated (dx, dy), clamped. Resets accumulator."""
+    def get_total_delta(self) -> tuple[int, int]:
+        """Return total (dx, dy) offset from pan start. Does NOT reset.
+
+        Each call returns the same value until more cursor movement
+        happens. The daemon uses this with baseline positions for
+        absolute moves, so drift cannot accumulate.
+        """
         with self._lock:
-            dx = int(round(self._acc_x))
-            dy = int(round(self._acc_y))
-            dx = max(-self._MAX_DELTA, min(self._MAX_DELTA, dx))
-            dy = max(-self._MAX_DELTA, min(self._MAX_DELTA, dy))
-            # Zero out completely — no "catch-up" after release
-            self._acc_x = 0.0
-            self._acc_y = 0.0
-            return dx, dy
+            return int(round(self._total_dx)), int(round(self._total_dy))
 
 
 def cursor_poller(state: PanningState, stop_event: threading.Event) -> None:
