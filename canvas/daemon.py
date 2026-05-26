@@ -6,12 +6,13 @@ import re
 import signal
 import threading
 import time
+from typing import Any
 
 from canvas.config import load
 from canvas.hypr import HyprIPC
 from canvas.ipc import IpcServer
 from canvas.navigation import Navigator
-from canvas.panning import PanningState, cursor_poller
+from canvas.panning import EdgeScrollState, PanningState, cursor_poller
 
 log = logging.getLogger("canvas")
 
@@ -32,13 +33,45 @@ class DaemonState:
     def __init__(
         self,
         panning: PanningState,
+        edge_scroll: EdgeScrollState,
         navigator: Navigator,
         ipc: HyprIPC,
     ) -> None:
         self.panning = panning
+        self.edge_scroll = edge_scroll
         self.navigator = navigator
         self.ipc = ipc
         self.baselines: dict[str, tuple[int, int]] = {}
+
+    def _fetch_focused_window_addr(self) -> str:
+        """Get address of currently focused window."""
+        try:
+            resp = self.ipc.send("j/activewindow")
+            w: dict[str, Any] = json.loads(resp)
+            return str(w.get("address", ""))
+        except Exception:
+            return ""
+
+    def _fetch_monitor_rect(self) -> None:
+        """Fetch focused monitor geometry for edge-scroll."""
+        try:
+            resp = self.ipc.send("j/monitors")
+            monitors: list[dict[str, Any]] = json.loads(resp)
+            for m in monitors:
+                if m.get("focused", False):
+                    self.edge_scroll.set_monitor_rect(
+                        m.get("x", 0), m.get("y", 0),
+                        m.get("width", 1920), m.get("height", 1080),
+                    )
+                    return
+            if monitors:
+                m = monitors[0]
+                self.edge_scroll.set_monitor_rect(
+                    m.get("x", 0), m.get("y", 0),
+                    m.get("width", 1920), m.get("height", 1080),
+                )
+        except Exception as e:
+            log.debug("fetch monitor rect failed: %s", e)
 
     def handle_ipc(self, cmd: str) -> str:
         """Process an IPC command, return response string."""
@@ -55,6 +88,14 @@ class DaemonState:
         elif cmd == "NAV_RIGHT":
             self.navigator.navigate("right")
             return "OK"
+        elif cmd == "EDGE_START":
+            addr = self._fetch_focused_window_addr()
+            if addr:
+                self._fetch_monitor_rect()
+                return self.edge_scroll.start(addr)
+            return "EDGE_NO_WINDOW"
+        elif cmd == "EDGE_STOP":
+            return self.edge_scroll.stop()
         elif cmd == "TOGGLE":
             self.panning.inverted = not self.panning.inverted
             return "INVERTED" if self.panning.inverted else "NORMAL"
@@ -139,6 +180,30 @@ class DaemonState:
         except Exception as e:
             log.warning("window move failed: %s", e)
 
+    def edge_scroll_move(self, dx: int, dy: int) -> None:
+        """Move all floating windows EXCEPT the dragged one by (dx, dy) relative.
+
+        Camera follows the dragged window: other windows shift opposite.
+        """
+        if dx == 0 and dy == 0:
+            return
+        dragged = self.edge_scroll.dragged_addr
+        try:
+            safe_addr = _lua_escape(dragged)
+            lua = (
+                f"local ws = hl.get_windows({{ floating = true }})\n"
+                f"for _, w in ipairs(ws) do\n"
+                f'  if tostring(w.address) ~= "{safe_addr}" then\n'
+                f"    hl.dispatch(hl.dsp.window.move({{"
+                f" x = {dx}, y = {dy},"
+                f" relative = true, window = w }}))\n"
+                f"  end\n"
+                f"end\n"
+            )
+            self.ipc.eval_lua(lua)
+        except Exception as e:
+            log.warning("edge-scroll move failed: %s", e)
+
 
 def run() -> None:
     """Main entry point for the canvas daemon."""
@@ -151,12 +216,21 @@ def run() -> None:
     state = PanningState(speed=cfg["speed"], max_speed=cfg.get("max_speed"))
     state.inverted = cfg["invert"]["enabled"]
 
+    edge_cfg = cfg.get("edge_scroll", {})
+    edge_scroll = EdgeScrollState(
+        threshold=edge_cfg.get("threshold", 50),
+        speed=edge_cfg.get("speed", 20.0),
+        enabled=edge_cfg.get("enabled", True),
+    )
+
     navigator = Navigator(
         protected_apps=cfg["navigation"]["protected_apps"],
         cooldown=cfg["navigation"]["cooldown"],
     )
 
-    daemon_state = DaemonState(panning=state, navigator=navigator, ipc=ipc)
+    daemon_state = DaemonState(
+        panning=state, edge_scroll=edge_scroll, navigator=navigator, ipc=ipc
+    )
 
     ipc_server = IpcServer(handler=daemon_state.handle_ipc)
 
@@ -171,10 +245,12 @@ def run() -> None:
     ipc_thread = threading.Thread(target=ipc_server.serve, daemon=True)
     ipc_thread.start()
 
-    cursor_thread = threading.Thread(target=cursor_poller, args=(state, stop_event), daemon=True)
+    cursor_thread = threading.Thread(
+        target=cursor_poller, args=(state, edge_scroll, stop_event), daemon=True
+    )
     cursor_thread.start()
 
-    log.info("ready — SUPER+SHIFT+LMB to pan, release to stop")
+    log.info("ready — SUPER+SHIFT+LMB to pan, SUPER+LMB to edge-scroll")
 
     target_interval = 1.0 / 60.0
     prev_time = time.monotonic()
@@ -184,33 +260,24 @@ def run() -> None:
         while not stop_event.is_set():
             state.check_idle_timeout()
 
+            # --- Canvas pan (SUPER+SHIFT+LMB) ---
             if not state.pan_active:
                 prev_total = (0, 0)
-                now = time.monotonic()
-                elapsed = now - prev_time
-                time.sleep(max(0, target_interval - elapsed))
-                prev_time = time.monotonic()
-                continue
+            else:
+                total_dx, total_dy = state.get_total_delta()
+                if (total_dx, total_dy) != (0, 0) and (total_dx, total_dy) != prev_total:
+                    prev_total = (total_dx, total_dy)
+                    try:
+                        daemon_state.move_windows_to_delta(total_dx, total_dy)
+                    except Exception as e:
+                        log.warning("window move failed: %s", e)
 
-            total_dx, total_dy = state.get_total_delta()
-            if total_dx == 0 and total_dy == 0:
-                now = time.monotonic()
-                elapsed = now - prev_time
-                time.sleep(max(0, target_interval - elapsed))
-                prev_time = time.monotonic()
-                continue
-            if (total_dx, total_dy) == prev_total:
-                now = time.monotonic()
-                elapsed = now - prev_time
-                time.sleep(max(0, target_interval - elapsed))
-                prev_time = time.monotonic()
-                continue
-            prev_total = (total_dx, total_dy)
-
-            try:
-                daemon_state.move_windows_to_delta(total_dx, total_dy)
-            except Exception as e:
-                log.warning("window move failed: %s", e)
+            # --- Edge-scroll (SUPER+LMB drag) ---
+            if edge_scroll.active:
+                cx, cy = edge_scroll.get_cursor_pos()
+                es_dx, es_dy = edge_scroll.compute_scroll(cx, cy)
+                if es_dx != 0 or es_dy != 0:
+                    daemon_state.edge_scroll_move(es_dx, es_dy)
 
             now = time.monotonic()
             elapsed = now - prev_time

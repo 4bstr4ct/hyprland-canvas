@@ -3,15 +3,16 @@
 from unittest.mock import MagicMock
 
 from canvas.daemon import DaemonState, _lua_escape
-from canvas.panning import PanningState
+from canvas.panning import EdgeScrollState, PanningState
 
 
 def _make_daemon_state(ipc: MagicMock | None = None) -> DaemonState:
     panning = PanningState(speed=1.0)
+    edge_scroll = EdgeScrollState(threshold=50, speed=20.0, enabled=True)
     navigator = MagicMock()
     if ipc is None:
         ipc = MagicMock()
-    return DaemonState(panning=panning, navigator=navigator, ipc=ipc)
+    return DaemonState(panning=panning, edge_scroll=edge_scroll, navigator=navigator, ipc=ipc)
 
 
 def test_handle_ipc_pan_start_fetches_baselines():
@@ -237,3 +238,62 @@ def test_fetch_baselines_multiple_floating():
     ds.fetch_baselines()
 
     assert ds.baselines == {"0xaaa": (10, 20), "0xbbb": (300, 400)}
+
+
+def test_handle_ipc_edge_start():
+    """EDGE_START fetches active window and activates edge-scroll."""
+    ipc = MagicMock()
+    ipc.send.return_value = '{"address":"0xabc"}'
+    ds = _make_daemon_state(ipc)
+
+    result = ds.handle_ipc("EDGE_START")
+    assert result == "EDGE_ON"
+    assert ds.edge_scroll.active is True
+    assert ds.edge_scroll.dragged_addr == "0xabc"
+
+
+def test_handle_ipc_edge_start_no_window():
+    """EDGE_START with no active window returns EDGE_NO_WINDOW."""
+    ipc = MagicMock()
+    ipc.send.side_effect = Exception("no window")
+    ds = _make_daemon_state(ipc)
+
+    result = ds.handle_ipc("EDGE_START")
+    assert result == "EDGE_NO_WINDOW"
+
+
+def test_handle_ipc_edge_stop():
+    """EDGE_STOP deactivates edge-scroll."""
+    ds = _make_daemon_state()
+    ds.edge_scroll.start("0xabc")
+
+    result = ds.handle_ipc("EDGE_STOP")
+    assert result == "EDGE_OFF"
+    assert ds.edge_scroll.active is False
+
+
+def test_edge_scroll_move_excludes_dragged():
+    """edge_scroll_move generates Lua that excludes dragged window."""
+    ipc = MagicMock()
+    ipc.eval_lua.return_value = "ok"
+    ds = _make_daemon_state(ipc)
+    ds.edge_scroll.start("0xabc")
+
+    ds.edge_scroll_move(10, -5)
+
+    ipc.eval_lua.assert_called_once()
+    lua_code = ipc.eval_lua.call_args[0][0]
+    assert "0xabc" in lua_code
+    assert "~=" in lua_code
+    assert "relative = true" in lua_code
+
+
+def test_edge_scroll_move_zero_delta_is_noop():
+    """edge_scroll_move with (0,0) does nothing."""
+    ipc = MagicMock()
+    ds = _make_daemon_state(ipc)
+    ds.edge_scroll.start("0xabc")
+
+    ds.edge_scroll_move(0, 0)
+
+    ipc.eval_lua.assert_not_called()

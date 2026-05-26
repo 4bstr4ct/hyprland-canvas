@@ -5,6 +5,8 @@ Architecture:
 - When pan_active, accumulate total delta from cursor movement
 - Daemon uses absolute positioning (baseline + total_delta) to avoid drift
 - PAN_START/PAN_STOP controlled by Hyprland keybinds
+- Edge-scroll: when dragging a window near screen edge, camera follows
+  the window by moving all OTHER floating windows in the opposite direction
 """
 
 import logging
@@ -130,13 +132,128 @@ class PanningState:
             return int(round(self._total_dx)), int(round(self._total_dy))
 
 
-def cursor_poller(state: PanningState, stop_event: threading.Event) -> None:
-    """Poll cursor position at ~60Hz, feed to PanningState."""
+class EdgeScrollState:
+    """Thread-safe edge-scroll state.
+
+    When a window is dragged near a monitor edge, camera follows by
+    moving all OTHER floating windows in the opposite direction.
+    The dragged window stays under cursor control (Hyprland drag).
+
+    Speed increases quadratically as cursor approaches the edge.
+    """
+
+    def __init__(
+        self,
+        threshold: int = 50,
+        speed: float = 20.0,
+        enabled: bool = True,
+    ) -> None:
+        self.threshold = threshold
+        self.speed = speed
+        self.enabled = enabled
+        self._active = False
+        self._dragged_addr: str = ""
+        self._monitor_x = 0
+        self._monitor_y = 0
+        self._monitor_w = 1920
+        self._monitor_h = 1080
+        self._cursor_x = 0
+        self._cursor_y = 0
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> bool:
+        with self._lock:
+            return self._active
+
+    @property
+    def dragged_addr(self) -> str:
+        with self._lock:
+            return self._dragged_addr
+
+    def set_monitor_rect(self, x: int, y: int, w: int, h: int) -> None:
+        with self._lock:
+            self._monitor_x = x
+            self._monitor_y = y
+            self._monitor_w = w
+            self._monitor_h = h
+
+    def start(self, dragged_addr: str) -> str:
+        """Activate edge-scroll, remembering which window is dragged."""
+        with self._lock:
+            if not self.enabled:
+                return "EDGE_DISABLED"
+            self._active = True
+            self._dragged_addr = dragged_addr
+            return "EDGE_ON"
+
+    def stop(self) -> str:
+        """Deactivate edge-scroll."""
+        with self._lock:
+            self._active = False
+            self._dragged_addr = ""
+            return "EDGE_OFF"
+
+    def get_cursor_pos(self) -> tuple[int, int]:
+        """Return last known cursor position (from cursor_poller)."""
+        with self._lock:
+            return self._cursor_x, self._cursor_y
+
+    def compute_scroll(self, cursor_x: int, cursor_y: int) -> tuple[int, int]:
+        """Calculate scroll offset (dx, dy) based on cursor position.
+
+        Returns (0, 0) if cursor not in edge zone or edge-scroll inactive.
+        Direction: cursor at right edge → positive dx (scroll right/camera right).
+        Speed: quadratic ramp, speed * progress² at edge.
+        """
+        with self._lock:
+            if not self._active or not self.enabled:
+                return 0, 0
+
+            dx = 0
+            dy = 0
+            mx = self._monitor_x
+            my = self._monitor_y
+            mw = self._monitor_w
+            mh = self._monitor_h
+            th = self.threshold
+
+            dist_left = cursor_x - mx
+            dist_right = (mx + mw) - cursor_x
+            dist_top = cursor_y - my
+            dist_bottom = (my + mh) - cursor_y
+
+            if dist_left < th:
+                progress = 1.0 - dist_left / th
+                dx = -int(self.speed * progress * progress)
+            elif dist_right < th:
+                progress = 1.0 - dist_right / th
+                dx = int(self.speed * progress * progress)
+
+            if dist_top < th:
+                progress = 1.0 - dist_top / th
+                dy = -int(self.speed * progress * progress)
+            elif dist_bottom < th:
+                progress = 1.0 - dist_bottom / th
+                dy = int(self.speed * progress * progress)
+
+            return dx, dy
+
+
+def cursor_poller(
+    state: PanningState,
+    edge_scroll: EdgeScrollState,
+    stop_event: threading.Event,
+) -> None:
+    """Poll cursor position at ~60Hz, feed to PanningState and EdgeScrollState."""
     err_count = 0
     while not stop_event.is_set():
         try:
             x, y = hypr.get_cursor_pos()
             state.update_cursor(x, y)
+            with edge_scroll._lock:
+                edge_scroll._cursor_x = x
+                edge_scroll._cursor_y = y
             err_count = 0
         except Exception as e:
             err_count += 1
@@ -148,3 +265,4 @@ def cursor_poller(state: PanningState, stop_event: threading.Event) -> None:
                 stop_event.set()
                 return
         stop_event.wait(0.016)
+

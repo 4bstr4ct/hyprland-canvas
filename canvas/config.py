@@ -28,6 +28,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "invert": {
         "enabled": True,
     },
+    "edge_scroll": {
+        "enabled": True,
+        "threshold": 50,
+        "speed": 20.0,
+    },
 }
 
 
