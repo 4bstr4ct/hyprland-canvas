@@ -2,15 +2,22 @@
 
 Server runs in daemon, listens for commands.
 Client (canvas-ctl) sends a command, gets a response, exits.
+
+Security:
+- SO_PEERCRED: rejects connections from processes with different UID
+- Symlink check: refuses to bind if socket path is a symlink
 """
 
 import logging
 import os
 import socket
+import struct
 import threading
 from collections.abc import Callable
 
 log = logging.getLogger("canvas.ipc")
+
+_MY_UID = os.getuid()
 
 
 def _default_socket_path() -> str:
@@ -19,6 +26,19 @@ def _default_socket_path() -> str:
     if os.path.isdir(run_dir):
         return os.path.join(run_dir, "canvas.sock")
     return os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/tmp/user/{uid}"), "canvas.sock")
+
+
+def _get_peer_uid(conn: socket.socket) -> int | None:
+    """Get the UID of the process on the other end of a Unix socket.
+
+    Uses SO_PEERCRED (Linux). Returns None on unsupported platforms.
+    """
+    try:
+        cred = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iii"))
+        _, uid, _ = struct.unpack("iii", cred)
+        return int(uid)
+    except (AttributeError, OSError):
+        return None
 
 
 class IpcServer:
@@ -37,6 +57,10 @@ class IpcServer:
 
     def serve(self) -> None:
         """Start listening. Blocks until stop() is called."""
+        if os.path.islink(self.sock_path):
+            log.error("socket path is a symlink, refusing to bind: %s", self.sock_path)
+            return
+
         if os.path.exists(self.sock_path):
             os.unlink(self.sock_path)
 
@@ -49,6 +73,12 @@ class IpcServer:
             try:
                 conn, _ = self._server_socket.accept()
             except TimeoutError:
+                continue
+
+            peer_uid = _get_peer_uid(conn)
+            if peer_uid is not None and peer_uid != _MY_UID:
+                log.warning("rejected IPC connection from uid %d", peer_uid)
+                conn.close()
                 continue
 
             try:
