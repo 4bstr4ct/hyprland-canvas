@@ -164,3 +164,9 @@ def test_max_speed_none_no_clamp():
     dx, dy = state.get_total_delta()
     assert dx == -100
     assert dy == -100
+
+
+def test_poller_alive_initially_true():
+    """poller_alive starts as True."""
+    state = PanningState(speed=1.0)
+    assert state.poller_alive is True

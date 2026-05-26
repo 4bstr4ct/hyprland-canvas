@@ -117,24 +117,27 @@ class DaemonState:
 
     def move_windows_to_delta(self, total_dx: int, total_dy: int) -> None:
         """Move all floating windows to baseline + total_delta (absolute positioning)."""
-        lines = ["local ws = hl.get_windows({ floating = true })"]
-        lines.append("local bd = {")
-        for addr, (bx, by) in self.baselines.items():
-            safe_addr = _lua_escape(addr)
-            lines.append(f'  ["{safe_addr}"] = {{{bx}, {by}}},')
-        lines.append("}")
-        lines.append("for _, w in ipairs(ws) do")
-        lines.append("  local b = bd[tostring(w.address)]")
-        lines.append("  if b then")
-        lines.append(
-            f"    hl.dispatch(hl.dsp.window.move({{"
-            f" x = b[1] + {total_dx},"
-            f" y = b[2] + {total_dy},"
-            f" relative = false, window = w }}))"
-        )
-        lines.append("  end")
-        lines.append("end")
-        self.ipc.eval_lua("\n".join(lines))
+        try:
+            lines = ["local ws = hl.get_windows({ floating = true })"]
+            lines.append("local bd = {")
+            for addr, (bx, by) in self.baselines.items():
+                safe_addr = _lua_escape(addr)
+                lines.append(f'  ["{safe_addr}"] = {{{bx}, {by}}},')
+            lines.append("}")
+            lines.append("for _, w in ipairs(ws) do")
+            lines.append("  local b = bd[tostring(w.address)]")
+            lines.append("  if b then")
+            lines.append(
+                f"    hl.dispatch(hl.dsp.window.move({{"
+                f" x = b[1] + {total_dx},"
+                f" y = b[2] + {total_dy},"
+                f" relative = false, window = w }}))"
+            )
+            lines.append("  end")
+            lines.append("end")
+            self.ipc.eval_lua("\n".join(lines))
+        except Exception as e:
+            log.warning("window move failed: %s", e)
 
 
 def run() -> None:

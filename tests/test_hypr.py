@@ -105,3 +105,50 @@ def test_module_level_get_cursor_pos_delegates():
 
     assert x == 42
     assert y == 84
+
+
+def test_send_empty_response():
+    """send() handles empty response from Hyprland."""
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [b""]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    result = ipc.send("cursorpos")
+
+    assert result == ""
+
+
+def test_send_connection_error():
+    """send() raises when both persistent and fresh connections fail."""
+    ipc = HyprIPC("/tmp/test.sock")
+    ipc._connect = MagicMock(side_effect=ConnectionError("refused"))  # type: ignore[assignment]
+
+    try:
+        ipc.send("cursorpos")
+        raise AssertionError("should have raised ConnectionError")
+    except ConnectionError:
+        pass
+
+
+def test_get_cursor_pos_single_digit():
+    """get_cursor_pos handles single-digit coordinates."""
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [b"0, 0", b""]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    x, y = ipc.get_cursor_pos()
+
+    assert x == 0
+    assert y == 0
+
+
+def test_from_env_uses_hyprland_socket():
+    """from_env() resolves socket path from HYPRLAND_INSTANCE_SIGNATURE."""
+    with (
+        patch("canvas.hypr.os.environ.get", return_value="test_sig"),
+        patch("canvas.hypr.os.getuid", return_value=1000),
+        patch("canvas.hypr.os.path.exists", return_value=True),
+    ):
+        ipc = HyprIPC.from_env()
+
+    assert "test_sig" in ipc._socket_path

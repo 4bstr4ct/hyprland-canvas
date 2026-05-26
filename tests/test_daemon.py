@@ -167,3 +167,73 @@ def test_lua_escape():
     assert _lua_escape("a\\b") == "a\\\\b"
     assert _lua_escape("a\nb") == "a\\nb"
     assert _lua_escape("0x1a2b") == "0x1a2b"
+
+
+def test_fetch_baselines_window_without_at():
+    """fetch_baselines uses default [0,0] when 'at' field missing."""
+    ipc = MagicMock()
+    ipc.send.return_value = '[{"address":"0xabc","floating":true}]'
+    ds = _make_daemon_state(ipc)
+
+    ds.fetch_baselines()
+
+    assert ds.baselines == {"0xabc": (0, 0)}
+
+
+def test_fetch_baselines_window_with_empty_address():
+    """fetch_baselines skips windows with empty address."""
+    ipc = MagicMock()
+    ipc.send.return_value = '[{"address":"","floating":true,"at":[10,20]}]'
+    ds = _make_daemon_state(ipc)
+
+    ds.fetch_baselines()
+
+    assert ds.baselines == {}
+
+
+def test_fetch_baselines_ipc_error():
+    """fetch_baselines handles IPC send failure gracefully."""
+    ipc = MagicMock()
+    ipc.send.side_effect = ConnectionError("socket failed")
+    ds = _make_daemon_state(ipc)
+
+    ds.fetch_baselines()
+
+    assert ds.baselines == {}
+
+
+def test_restore_baselines_ipc_error():
+    """restore_baselines handles IPC eval_lua failure gracefully."""
+    ipc = MagicMock()
+    ipc.eval_lua.side_effect = ConnectionError("socket failed")
+    ds = _make_daemon_state(ipc)
+    ds.baselines = {"0xabc": (100, 200)}
+
+    ds.restore_baselines()  # should not raise
+
+    assert ds.baselines == {"0xabc": (100, 200)}
+
+
+def test_move_windows_to_delta_ipc_error():
+    """move_windows_to_delta handles IPC failure gracefully."""
+    ipc = MagicMock()
+    ipc.eval_lua.side_effect = ConnectionError("socket failed")
+    ds = _make_daemon_state(ipc)
+    ds.baselines = {"0xabc": (100, 200)}
+
+    ds.move_windows_to_delta(50, 50)  # should not raise
+
+
+def test_fetch_baselines_multiple_floating():
+    """fetch_baselines correctly extracts multiple floating windows."""
+    ipc = MagicMock()
+    ipc.send.return_value = (
+        '[{"address":"0xaaa","floating":true,"at":[10,20]},'
+        '{"address":"0xbbb","floating":true,"at":[300,400]},'
+        '{"address":"0xccc","floating":false,"at":[500,600]}]'
+    )
+    ds = _make_daemon_state(ipc)
+
+    ds.fetch_baselines()
+
+    assert ds.baselines == {"0xaaa": (10, 20), "0xbbb": (300, 400)}
