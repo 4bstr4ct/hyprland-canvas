@@ -32,6 +32,7 @@ class PanningState:
         self.max_speed = max_speed
         self._pan_active = False
         self._inverted = False
+        self.poller_alive = True
 
         self._prev_x: int | None = None
         self._prev_y: int | None = None
@@ -143,5 +144,7 @@ def cursor_poller(state: PanningState, stop_event: threading.Event) -> None:
                 log.warning("cursor poll error #%d: %s", err_count, e)
             if err_count > 10:
                 log.error("too many cursor poll failures, stopping poller")
+                state.poller_alive = False
+                stop_event.set()
                 return
         stop_event.wait(0.016)

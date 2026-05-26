@@ -217,6 +217,9 @@ def run() -> None:
     except KeyboardInterrupt:
         log.info("shutting down...")
 
+    if not state.poller_alive:
+        log.error("cursor poller died — cannot track cursor position")
+
     stop_event.set()
     daemon_state.restore_baselines()
     ipc_server.stop()
