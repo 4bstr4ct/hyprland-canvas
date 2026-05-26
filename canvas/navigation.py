@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from typing import Any
 
 from canvas import hypr
 
@@ -19,9 +20,10 @@ def _safe_int(value: object, name: str) -> int:
     inserted into Lua f-strings MUST pass through this or _VALID_ADDR.
     """
     try:
-        return int(value)
+        result: int = int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsafe Lua value: {name}={value!r}") from exc
+    return result
 
 
 class Navigator:
@@ -112,13 +114,17 @@ class Navigator:
         except Exception as e:
             log.warning("set_all_floating failed: %s", e)
 
-    def _is_protected(self, window: dict) -> bool:
+    def _is_protected(self, window: dict[str, Any]) -> bool:
         """Check if window class matches a protected app."""
         window_class = window.get("class", "").lower()
         return any(app in window_class for app in self._protected_apps)
 
     def _pan_to_window(
-        self, floating_windows: list[dict], target_addr: str, center_x: int, center_y: int
+        self,
+        floating_windows: list[dict[str, Any]],
+        target_addr: Any,
+        center_x: int,
+        center_y: int,
     ) -> None:
         """Pan all floating windows so target window centers on monitor via Lua API."""
         target = None
@@ -170,16 +176,16 @@ class Navigator:
     def _get_active_workspace_id(self) -> int | None:
         try:
             resp = hypr.send("j/activeworkspace")
-            ws = json.loads(resp)
-            return ws["id"]
+            ws: dict[str, Any] = json.loads(resp)
+            return int(ws["id"])
         except Exception as e:
             log.debug("get_active_workspace_id failed: %s", e)
             return None
 
-    def _get_floating_windows(self, workspace_id: int) -> list[dict]:
+    def _get_floating_windows(self, workspace_id: int) -> list[dict[str, Any]]:
         try:
             resp = hypr.send("j/clients")
-            clients = json.loads(resp)
+            clients: list[dict[str, Any]] = json.loads(resp)
             return [
                 w
                 for w in clients
@@ -189,10 +195,11 @@ class Navigator:
             log.debug("get_floating_windows failed: %s", e)
             return []
 
-    def _get_focused_window(self) -> dict | None:
+    def _get_focused_window(self) -> dict[str, Any] | None:
         try:
             resp = hypr.send("j/activewindow")
-            return json.loads(resp)
+            result: dict[str, Any] = json.loads(resp)
+            return result
         except Exception as e:
             log.debug("get_focused_window failed: %s", e)
             return None
@@ -200,7 +207,7 @@ class Navigator:
     def _get_monitor_center(self) -> tuple[int, int]:
         try:
             resp = hypr.send("j/monitors")
-            monitors = json.loads(resp)
+            monitors: list[dict[str, Any]] = json.loads(resp)
             for m in monitors:
                 if m.get("focused", False):
                     return m["x"] + m["width"] // 2, m["y"] + m["height"] // 2

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -30,5 +30,8 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      - name: Run tests
-        run: uv run pytest -v
+      - name: Mypy
+        run: uv run mypy canvas/
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=canvas --cov-report=term-missing -v

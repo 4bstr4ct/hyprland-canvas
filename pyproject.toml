@@ -18,7 +18,16 @@ line-length = 99
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
 [dependency-groups]
 dev = [
+    "mypy>=2.1.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.13",
+    "types-pyyaml>=6.0.12.20260518",
 ]

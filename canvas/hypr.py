@@ -87,7 +87,8 @@ class HyprIPC:
                 except Exception as e:
                     log.debug("persistent socket failed, reconnecting: %s", e)
                     with contextlib.suppress(Exception):
-                        self._socket.close()
+                        if self._socket is not None:
+                            self._socket.close()
                     self._socket = None
 
             s = self._connect()
