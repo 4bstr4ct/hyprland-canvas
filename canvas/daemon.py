@@ -6,13 +6,14 @@ import re
 import signal
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from canvas.config import load
 from canvas.hypr import HyprIPC, get_cursor_pos
 from canvas.ipc import IpcServer
 from canvas.navigation import Navigator
-from canvas.panning import EdgeScrollState, PanningState, cursor_poller
+from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState, cursor_poller
 
 log = logging.getLogger("canvas")
 
@@ -77,34 +78,58 @@ class DaemonState:
         except Exception as e:
             log.debug("fetch monitor rect failed: %s", e)
 
+    _IPC_DISPATCH: dict[str, str] = {
+        "PAN_START": "_handle_pan_start",
+        "PAN_STOP": "_handle_pan_stop",
+        "NAV_LEFT": "_handle_nav_left",
+        "NAV_RIGHT": "_handle_nav_right",
+        "EDGE_START": "_handle_edge_start",
+        "EDGE_STOP": "_handle_edge_stop",
+        "TOGGLE": "_handle_toggle",
+        "CANVAS_TOGGLE": "_handle_canvas_toggle",
+        "PING": "_handle_ping",
+        "STATUS": "_handle_status",
+    }
+
     def handle_ipc(self, cmd: str) -> str:
         """Process an IPC command, return response string."""
-        if cmd == "PAN_START":
-            self.fetch_baselines()
-            return self.panning.start_pan()
-        elif cmd == "PAN_STOP":
-            self.panning.stop_pan()
-            self.baselines = {}
-            return "PAN_OFF"
-        elif cmd == "NAV_LEFT":
-            self.navigator.navigate("left")
-            return "OK"
-        elif cmd == "NAV_RIGHT":
-            self.navigator.navigate("right")
-            return "OK"
-        elif cmd == "EDGE_START":
-            win = self._fetch_focused_window()
-            addr = str(win.get("address", ""))
-            if not addr:
-                return "EDGE_NO_WINDOW"
-            at = win.get("at", [0, 0])
-            size = win.get("size", [0, 0])
-            try:
-                cx, cy = get_cursor_pos()
-            except Exception:
-                return "EDGE_NO_CURSOR"
-            self._fetch_monitor_rect()
-            return self.edge_scroll.start(
+        handler_name = self._IPC_DISPATCH.get(cmd)
+        if handler_name is not None:
+            handler: Callable[[], str] = getattr(self, handler_name)
+            return handler()
+        return f"UNKNOWN: {cmd}"
+
+    def _handle_pan_start(self) -> str:
+        self.fetch_baselines()
+        return self.panning.start_pan()
+
+    def _handle_pan_stop(self) -> str:
+        self.panning.stop_pan()
+        self.baselines = {}
+        return "PAN_OFF"
+
+    def _handle_nav_left(self) -> str:
+        self.navigator.navigate("left")
+        return "OK"
+
+    def _handle_nav_right(self) -> str:
+        self.navigator.navigate("right")
+        return "OK"
+
+    def _handle_edge_start(self) -> str:
+        win = self._fetch_focused_window()
+        addr = str(win.get("address", ""))
+        if not addr:
+            return "EDGE_NO_WINDOW"
+        at = win.get("at", [0, 0])
+        size = win.get("size", [0, 0])
+        try:
+            cx, cy = get_cursor_pos()
+        except Exception:
+            return "EDGE_NO_CURSOR"
+        self._fetch_monitor_rect()
+        return self.edge_scroll.start(
+            EdgeScrollParams(
                 dragged_addr=addr,
                 win_x=at[0] if len(at) >= 2 else 0,
                 win_y=at[1] if len(at) >= 2 else 0,
@@ -113,21 +138,25 @@ class DaemonState:
                 cursor_x=cx,
                 cursor_y=cy,
             )
-        elif cmd == "EDGE_STOP":
-            return self.edge_scroll.stop()
-        elif cmd == "TOGGLE":
-            self.panning.inverted = not self.panning.inverted
-            return "INVERTED" if self.panning.inverted else "NORMAL"
-        elif cmd == "CANVAS_TOGGLE":
-            return self.navigator.canvas_toggle()
-        elif cmd == "PING":
-            return "PONG"
-        elif cmd == "STATUS":
-            inv = "INVERTED" if self.panning.inverted else "NORMAL"
-            pan = "PANNING" if self.panning.is_dragging else "IDLE"
-            return f"{inv} {pan}"
-        else:
-            return f"UNKNOWN: {cmd}"
+        )
+
+    def _handle_edge_stop(self) -> str:
+        return self.edge_scroll.stop()
+
+    def _handle_toggle(self) -> str:
+        self.panning.inverted = not self.panning.inverted
+        return "INVERTED" if self.panning.inverted else "NORMAL"
+
+    def _handle_canvas_toggle(self) -> str:
+        return self.navigator.canvas_toggle()
+
+    def _handle_ping(self) -> str:
+        return "PONG"
+
+    def _handle_status(self) -> str:
+        inv = "INVERTED" if self.panning.inverted else "NORMAL"
+        pan = "PANNING" if self.panning.is_dragging else "IDLE"
+        return f"{inv} {pan}"
 
     def fetch_baselines(self) -> None:
         """Fetch current positions of all floating windows as baseline."""
@@ -282,7 +311,6 @@ def run() -> None:
         while not stop_event.is_set():
             state.check_idle_timeout()
 
-            # --- Canvas pan (SUPER+SHIFT+LMB) ---
             if not state.pan_active:
                 prev_total = (0, 0)
             else:
@@ -294,7 +322,6 @@ def run() -> None:
                     except Exception as e:
                         log.warning("window move failed: %s", e)
 
-            # --- Edge-scroll (SUPER+LMB drag) ---
             edge_scroll.check_idle_timeout()
             if edge_scroll.active:
                 es_dx, es_dy = edge_scroll.consume_delta()
@@ -306,8 +333,8 @@ def run() -> None:
             time.sleep(max(0, target_interval - elapsed))
             prev_time = time.monotonic()
 
-    except KeyboardInterrupt:
-        log.info("shutting down...")
+    except KeyboardInterrupt as exc:
+        log.info("shutting down: %s", exc)
 
     if not state.poller_alive:
         log.error("cursor poller died — cannot track cursor position")

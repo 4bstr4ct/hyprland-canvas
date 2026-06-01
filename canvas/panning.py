@@ -15,10 +15,22 @@ Architecture:
 import logging
 import threading
 import time
+from dataclasses import dataclass
 
 from canvas import hypr
 
 log = logging.getLogger("canvas.panning")
+
+
+@dataclass
+class EdgeScrollParams:
+    dragged_addr: str
+    win_x: int
+    win_y: int
+    win_w: int
+    win_h: int
+    cursor_x: int
+    cursor_y: int
 
 
 class PanningState:
@@ -199,36 +211,27 @@ class EdgeScrollState:
             self._monitor_w = w
             self._monitor_h = h
 
-    def start(
-        self,
-        dragged_addr: str,
-        win_x: int,
-        win_y: int,
-        win_w: int,
-        win_h: int,
-        cursor_x: int,
-        cursor_y: int,
-    ) -> str:
+    def start(self, params: EdgeScrollParams) -> str:
         """Activate edge-scroll, storing window geometry, cursor offset, and initial distances."""
         with self._lock:
             if not self.enabled:
                 return "EDGE_DISABLED"
             self._active = True
-            self._dragged_addr = dragged_addr
-            self._win_w = win_w
-            self._win_h = win_h
-            self._offset_x = cursor_x - win_x
-            self._offset_y = cursor_y - win_y
+            self._dragged_addr = params.dragged_addr
+            self._win_w = params.win_w
+            self._win_h = params.win_h
+            self._offset_x = params.cursor_x - params.win_x
+            self._offset_y = params.cursor_y - params.win_y
 
             mx = self._monitor_x
             my = self._monitor_y
             mw = self._monitor_w
             mh = self._monitor_h
 
-            self._initial_dist_left = win_x - mx
-            self._initial_dist_right = (mx + mw) - (win_x + win_w)
-            self._initial_dist_top = win_y - my
-            self._initial_dist_bottom = (my + mh) - (win_y + win_h)
+            self._initial_dist_left = params.win_x - mx
+            self._initial_dist_right = (mx + mw) - (params.win_x + params.win_w)
+            self._initial_dist_top = params.win_y - my
+            self._initial_dist_bottom = (my + mh) - (params.win_y + params.win_h)
 
             self._pending_dx = 0.0
             self._pending_dy = 0.0

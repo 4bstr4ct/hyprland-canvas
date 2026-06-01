@@ -184,8 +184,6 @@ class Navigator:
 
         self._ipc.eval_lua(lua)
 
-    # --- Hyprland IPC helpers (via direct socket) ---
-
     def _get_active_workspace_id(self) -> int | None:
         try:
             resp = self._ipc.send("j/activeworkspace")
@@ -202,7 +200,9 @@ class Navigator:
             return [
                 w
                 for w in clients
-                if w.get("floating") and w.get("workspace", {}).get("id") == workspace_id
+                if w.get("floating")
+                and (ws := w.get("workspace")) is not None
+                and ws.get("id") == workspace_id
             ]
         except Exception as e:
             log.debug("get_floating_windows failed: %s", e)

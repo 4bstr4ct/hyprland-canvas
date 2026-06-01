@@ -1,4 +1,4 @@
-from canvas.panning import EdgeScrollState, PanningState
+from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState
 
 
 def test_start_pan_activates():
@@ -151,7 +151,17 @@ def _start_edge(
 ) -> None:
     cursor_x = win_x + cursor_offset_x
     cursor_y = win_y + cursor_offset_y
-    es.start("0xabc", win_x, win_y, win_w, win_h, cursor_x, cursor_y)
+    es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=win_x,
+            win_y=win_y,
+            win_w=win_w,
+            win_h=win_h,
+            cursor_x=cursor_x,
+            cursor_y=cursor_y,
+        )
+    )
 
 
 def test_edge_scroll_inactive_by_default():
@@ -161,7 +171,17 @@ def test_edge_scroll_inactive_by_default():
 
 def test_edge_scroll_start():
     es = EdgeScrollState(enabled=True)
-    result = es.start("0xabc", 100, 100, 500, 300, 350, 250)
+    result = es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=100,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=250,
+        )
+    )
     assert result == "EDGE_ON"
     assert es.active is True
     assert es.dragged_addr == "0xabc"
@@ -169,14 +189,34 @@ def test_edge_scroll_start():
 
 def test_edge_scroll_start_disabled():
     es = EdgeScrollState(enabled=False)
-    result = es.start("0xabc", 100, 100, 500, 300, 350, 250)
+    result = es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=100,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=250,
+        )
+    )
     assert result == "EDGE_DISABLED"
     assert es.active is False
 
 
 def test_edge_scroll_stop():
     es = EdgeScrollState(enabled=True)
-    es.start("0xabc", 100, 100, 500, 300, 350, 250)
+    es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=100,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=250,
+        )
+    )
     result = es.stop()
     assert result == "EDGE_OFF"
     assert es.active is False
@@ -327,7 +367,17 @@ def test_edge_scroll_ramp_distance_linear():
     dx_small, _ = es.consume_delta()
 
     # Start at edge, drag 40px past
-    es.start("0xabc", 1420, 390, 500, 300, 1670, 540)
+    es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=1420,
+            win_y=390,
+            win_w=500,
+            win_h=300,
+            cursor_x=1670,
+            cursor_y=540,
+        )
+    )
     es.update_cursor(1710, 540)  # 40px overflow
     dx_large, _ = es.consume_delta()
 
@@ -361,7 +411,17 @@ def test_edge_scroll_inactive_returns_zero():
 
 def test_edge_scroll_idle_timeout():
     es = EdgeScrollState(ramp_distance=50, speed=20.0, enabled=True)
-    es.start("0xabc", 1420, 390, 500, 300, 1670, 540)
+    es.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=1420,
+            win_y=390,
+            win_w=500,
+            win_h=300,
+            cursor_x=1670,
+            cursor_y=540,
+        )
+    )
     es.update_cursor(1670, 540)
 
     import time

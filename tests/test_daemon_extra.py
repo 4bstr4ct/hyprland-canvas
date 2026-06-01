@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from canvas.daemon import DaemonState
-from canvas.panning import EdgeScrollState, PanningState
+from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState
 
 
 def _make_daemon_state(ipc: MagicMock | None = None) -> DaemonState:
@@ -67,7 +67,17 @@ def test_edge_scroll_move_ipc_error():
     ipc = MagicMock()
     ipc.eval_lua.side_effect = ConnectionError("fail")
     ds = _make_daemon_state(ipc)
-    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
     ds.edge_scroll_move(10, -5)  # should not raise
 
 

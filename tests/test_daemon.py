@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from canvas.daemon import DaemonState, _lua_escape
-from canvas.panning import EdgeScrollState, PanningState
+from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState
 
 
 def _make_daemon_state(ipc: MagicMock | None = None) -> DaemonState:
@@ -266,7 +266,17 @@ def test_handle_ipc_edge_start_no_window():
 def test_handle_ipc_edge_stop():
     """EDGE_STOP deactivates edge-scroll."""
     ds = _make_daemon_state()
-    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
 
     result = ds.handle_ipc("EDGE_STOP")
     assert result == "EDGE_OFF"
@@ -278,7 +288,17 @@ def test_edge_scroll_move_excludes_dragged():
     ipc = MagicMock()
     ipc.eval_lua.return_value = "ok"
     ds = _make_daemon_state(ipc)
-    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
 
     ds.edge_scroll_move(10, -5)
 
@@ -293,7 +313,17 @@ def test_edge_scroll_move_zero_delta_is_noop():
     """edge_scroll_move with (0,0) does nothing."""
     ipc = MagicMock()
     ds = _make_daemon_state(ipc)
-    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
 
     ds.edge_scroll_move(0, 0)
 
