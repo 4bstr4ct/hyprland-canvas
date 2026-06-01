@@ -1,6 +1,6 @@
 """Tests for canvas.daemon — DaemonState and helper functions."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from canvas.daemon import DaemonState, _lua_escape
 from canvas.panning import EdgeScrollState, PanningState
@@ -246,18 +246,11 @@ def test_handle_ipc_edge_start():
     ipc.send.return_value = '{"address":"0xabc","at":[100,200],"size":[500,300]}'
     ds = _make_daemon_state(ipc)
 
-    import canvas.hypr as hypr_mod
-
-    original_gcp = hypr_mod.get_cursor_pos
-    hypr_mod.get_cursor_pos = lambda: (350, 350)
-
-    try:
+    with patch("canvas.daemon.get_cursor_pos", return_value=(350, 350)):
         result = ds.handle_ipc("EDGE_START")
         assert result == "EDGE_ON"
         assert ds.edge_scroll.active is True
         assert ds.edge_scroll.dragged_addr == "0xabc"
-    finally:
-        hypr_mod.get_cursor_pos = original_gcp
 
 
 def test_handle_ipc_edge_start_no_window():
