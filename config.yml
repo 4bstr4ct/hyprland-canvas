@@ -22,6 +22,7 @@ invert:
   enabled: true               # true = grab canvas (intuitive), false = follow cursor
 
 edge_scroll:
-  enabled: true                # auto-pan when dragging window near screen edge
-  threshold: 50                # pixels from edge to activate
-  speed: 20.0                  # max px/frame at edge (~1200 px/s at 60fps)
+  enabled: true                # auto-pan when dragged window goes past screen edge
+  ramp_distance: 50              # px of overflow to reach max speed
+  speed: 20.0                   # max px/frame (~1200 px/s at 60fps)
+  # max_speed: 30              # optional: cap per-frame edge-scroll delta (pixels)

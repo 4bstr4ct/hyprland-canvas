@@ -34,4 +34,4 @@ jobs:
         run: uv run mypy canvas/
 
       - name: Run tests with coverage
-        run: uv run pytest --cov=canvas --cov-report=term-missing -v
+        run: uv run pytest --cov=canvas --cov-fail-under=80 --cov-report=term-missing -v

@@ -8,7 +8,7 @@ from canvas.panning import EdgeScrollState, PanningState
 
 def _make_daemon_state(ipc: MagicMock | None = None) -> DaemonState:
     panning = PanningState(speed=1.0)
-    edge_scroll = EdgeScrollState(threshold=50, speed=20.0, enabled=True)
+    edge_scroll = EdgeScrollState(ramp_distance=50, speed=20.0, enabled=True)
     navigator = MagicMock()
     if ipc is None:
         ipc = MagicMock()
@@ -241,15 +241,22 @@ def test_fetch_baselines_multiple_floating():
 
 
 def test_handle_ipc_edge_start():
-    """EDGE_START fetches active window and activates edge-scroll."""
+    """EDGE_START fetches active window, cursor pos and activates edge-scroll."""
     ipc = MagicMock()
-    ipc.send.return_value = '{"address":"0xabc"}'
+    ipc.send.return_value = '{"address":"0xabc","at":[100,200],"size":[500,300]}'
     ds = _make_daemon_state(ipc)
 
-    result = ds.handle_ipc("EDGE_START")
-    assert result == "EDGE_ON"
-    assert ds.edge_scroll.active is True
-    assert ds.edge_scroll.dragged_addr == "0xabc"
+    import canvas.hypr as hypr_mod
+    original_gcp = hypr_mod.get_cursor_pos
+    hypr_mod.get_cursor_pos = lambda: (350, 350)
+
+    try:
+        result = ds.handle_ipc("EDGE_START")
+        assert result == "EDGE_ON"
+        assert ds.edge_scroll.active is True
+        assert ds.edge_scroll.dragged_addr == "0xabc"
+    finally:
+        hypr_mod.get_cursor_pos = original_gcp
 
 
 def test_handle_ipc_edge_start_no_window():
@@ -265,7 +272,7 @@ def test_handle_ipc_edge_start_no_window():
 def test_handle_ipc_edge_stop():
     """EDGE_STOP deactivates edge-scroll."""
     ds = _make_daemon_state()
-    ds.edge_scroll.start("0xabc")
+    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
 
     result = ds.handle_ipc("EDGE_STOP")
     assert result == "EDGE_OFF"
@@ -277,7 +284,7 @@ def test_edge_scroll_move_excludes_dragged():
     ipc = MagicMock()
     ipc.eval_lua.return_value = "ok"
     ds = _make_daemon_state(ipc)
-    ds.edge_scroll.start("0xabc")
+    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
 
     ds.edge_scroll_move(10, -5)
 
@@ -292,7 +299,7 @@ def test_edge_scroll_move_zero_delta_is_noop():
     """edge_scroll_move with (0,0) does nothing."""
     ipc = MagicMock()
     ds = _make_daemon_state(ipc)
-    ds.edge_scroll.start("0xabc")
+    ds.edge_scroll.start("0xabc", 100, 200, 500, 300, 350, 350)
 
     ds.edge_scroll_move(0, 0)
 

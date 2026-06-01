@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any
 
-from canvas import hypr
+from canvas.hypr import HyprIPC
 
 log = logging.getLogger("canvas.navigation")
 
@@ -29,7 +29,13 @@ def _safe_int(value: object, name: str) -> int:
 class Navigator:
     """Handles navigation between floating windows with auto-pan."""
 
-    def __init__(self, protected_apps: list[str], cooldown: float = 0.2):
+    def __init__(
+        self,
+        ipc: HyprIPC,
+        protected_apps: list[str],
+        cooldown: float = 0.2,
+    ) -> None:
+        self._ipc = ipc
         self._protected_apps = [a.lower() for a in protected_apps]
         self._cooldown = cooldown
         self._last_nav_time = 0.0
@@ -117,7 +123,7 @@ class Navigator:
                 f"hl.dispatch(hl.dsp.focus({{ window = w }})) "
                 f'hl.dispatch(hl.dsp.window.float({{ action = "toggle" }})) end'
             )
-            hypr.eval_lua(lua)
+            self._ipc.eval_lua(lua)
         except Exception as e:
             log.warning("set_all_floating failed: %s", e)
 
@@ -176,13 +182,13 @@ class Navigator:
                     f"end\n"
                 )
 
-        hypr.eval_lua(lua)
+        self._ipc.eval_lua(lua)
 
     # --- Hyprland IPC helpers (via direct socket) ---
 
     def _get_active_workspace_id(self) -> int | None:
         try:
-            resp = hypr.send("j/activeworkspace")
+            resp = self._ipc.send("j/activeworkspace")
             ws: dict[str, Any] = json.loads(resp)
             return int(ws["id"])
         except Exception as e:
@@ -191,7 +197,7 @@ class Navigator:
 
     def _get_floating_windows(self, workspace_id: int) -> list[dict[str, Any]]:
         try:
-            resp = hypr.send("j/clients")
+            resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
             return [
                 w
@@ -204,7 +210,7 @@ class Navigator:
 
     def _get_focused_window(self) -> dict[str, Any] | None:
         try:
-            resp = hypr.send("j/activewindow")
+            resp = self._ipc.send("j/activewindow")
             result: dict[str, Any] = json.loads(resp)
             return result
         except Exception as e:
@@ -213,7 +219,7 @@ class Navigator:
 
     def _get_monitor_center(self) -> tuple[int, int]:
         try:
-            resp = hypr.send("j/monitors")
+            resp = self._ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
             for m in monitors:
                 if m.get("focused", False):

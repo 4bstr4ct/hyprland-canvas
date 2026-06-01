@@ -30,8 +30,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "edge_scroll": {
         "enabled": True,
-        "threshold": 50,
+        "ramp_distance": 50,
         "speed": 20.0,
+        "max_speed": None,
     },
 }
 

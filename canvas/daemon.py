@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from canvas.config import load
-from canvas.hypr import HyprIPC
+from canvas.hypr import HyprIPC, get_cursor_pos
 from canvas.ipc import IpcServer
 from canvas.navigation import Navigator
 from canvas.panning import EdgeScrollState, PanningState, cursor_poller
@@ -43,14 +43,14 @@ class DaemonState:
         self.ipc = ipc
         self.baselines: dict[str, tuple[int, int]] = {}
 
-    def _fetch_focused_window_addr(self) -> str:
-        """Get address of currently focused window."""
+    def _fetch_focused_window(self) -> dict[str, Any]:
+        """Get focused window info: address, position, size."""
         try:
             resp = self.ipc.send("j/activewindow")
             w: dict[str, Any] = json.loads(resp)
-            return str(w.get("address", ""))
+            return w
         except Exception:
-            return ""
+            return {}
 
     def _fetch_monitor_rect(self) -> None:
         """Fetch focused monitor geometry for edge-scroll."""
@@ -89,11 +89,26 @@ class DaemonState:
             self.navigator.navigate("right")
             return "OK"
         elif cmd == "EDGE_START":
-            addr = self._fetch_focused_window_addr()
-            if addr:
-                self._fetch_monitor_rect()
-                return self.edge_scroll.start(addr)
-            return "EDGE_NO_WINDOW"
+            win = self._fetch_focused_window()
+            addr = str(win.get("address", ""))
+            if not addr:
+                return "EDGE_NO_WINDOW"
+            at = win.get("at", [0, 0])
+            size = win.get("size", [0, 0])
+            try:
+                cx, cy = get_cursor_pos()
+            except Exception:
+                return "EDGE_NO_CURSOR"
+            self._fetch_monitor_rect()
+            return self.edge_scroll.start(
+                dragged_addr=addr,
+                win_x=at[0] if len(at) >= 2 else 0,
+                win_y=at[1] if len(at) >= 2 else 0,
+                win_w=size[0] if len(size) >= 2 else 0,
+                win_h=size[1] if len(size) >= 2 else 0,
+                cursor_x=cx,
+                cursor_y=cy,
+            )
         elif cmd == "EDGE_STOP":
             return self.edge_scroll.stop()
         elif cmd == "TOGGLE":
@@ -183,7 +198,8 @@ class DaemonState:
     def edge_scroll_move(self, dx: int, dy: int) -> None:
         """Move all floating windows EXCEPT the dragged one by (dx, dy) relative.
 
-        Camera follows the dragged window: other windows shift opposite.
+        Camera follows the dragged window: other windows move opposite.
+        Cursor at right edge → camera right → other windows move left.
         """
         if dx == 0 and dy == 0:
             return
@@ -218,12 +234,14 @@ def run() -> None:
 
     edge_cfg = cfg.get("edge_scroll", {})
     edge_scroll = EdgeScrollState(
-        threshold=edge_cfg.get("threshold", 50),
+        ramp_distance=edge_cfg.get("ramp_distance", 50),
         speed=edge_cfg.get("speed", 20.0),
+        max_speed=edge_cfg.get("max_speed"),
         enabled=edge_cfg.get("enabled", True),
     )
 
     navigator = Navigator(
+        ipc=ipc,
         protected_apps=cfg["navigation"]["protected_apps"],
         cooldown=cfg["navigation"]["cooldown"],
     )
@@ -273,9 +291,9 @@ def run() -> None:
                         log.warning("window move failed: %s", e)
 
             # --- Edge-scroll (SUPER+LMB drag) ---
+            edge_scroll.check_idle_timeout()
             if edge_scroll.active:
-                cx, cy = edge_scroll.get_cursor_pos()
-                es_dx, es_dy = edge_scroll.compute_scroll(cx, cy)
+                es_dx, es_dy = edge_scroll.consume_delta()
                 if es_dx != 0 or es_dy != 0:
                     daemon_state.edge_scroll_move(es_dx, es_dy)
 

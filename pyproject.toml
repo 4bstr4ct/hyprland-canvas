@@ -1,3 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["canvas"]
+
 [project]
 name = "hyprland-canvas"
 version = "0.1.0"
@@ -11,6 +18,7 @@ canvas-ctl = "canvas.__main__:ctl_main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=canvas --cov-fail-under=80"
 
 [tool.ruff]
 line-length = 99

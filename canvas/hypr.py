@@ -56,6 +56,7 @@ class HyprIPC:
     def _connect(self) -> socket.socket:
         """Create a new connection to Hyprland IPC socket."""
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2.0)
         s.connect(self._socket_path)
         return s
 

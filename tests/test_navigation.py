@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from canvas.navigation import Navigator
 
@@ -32,7 +32,7 @@ def test_navigate_right_cycles():
         _make_window("editor", "0x3", 100, 500, 400, 300),
     ]
 
-    nav = Navigator(protected_apps=["firefox"], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=["firefox"], cooldown=0.0)
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
@@ -54,7 +54,7 @@ def test_navigate_left_cycles():
         _make_window("editor", "0x3", 100, 500, 400, 300),
     ]
 
-    nav = Navigator(protected_apps=[], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
@@ -72,7 +72,7 @@ def test_navigate_single_window_does_nothing():
     """With only one floating window, navigation does nothing."""
     windows = [_make_window("terminal", "0x1", 100, 100, 400, 300)]
 
-    nav = Navigator(protected_apps=[], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
@@ -86,7 +86,7 @@ def test_navigate_single_window_does_nothing():
 
 def test_is_protected():
     """Protected apps are detected by class name."""
-    nav = Navigator(protected_apps=["firefox", "brave-browser"], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=["firefox", "brave-browser"], cooldown=0.0)
     assert nav._is_protected({"class": "firefox"}) is True
     assert nav._is_protected({"class": "brave-browser"}) is True
     assert nav._is_protected({"class": "kitty"}) is False
@@ -99,7 +99,7 @@ def test_navigate_all_protected_does_nothing():
         _make_window("brave-browser", "0x2", 600, 100, 800, 600),
     ]
 
-    nav = Navigator(protected_apps=["firefox", "brave-browser"], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=["firefox", "brave-browser"], cooldown=0.0)
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
@@ -118,7 +118,7 @@ def test_navigate_cooldown_blocks_rapid_calls():
         _make_window("b", "0x2", 600, 100, 400, 300),
     ]
 
-    nav = Navigator(protected_apps=[], cooldown=10.0)  # 10s cooldown
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=10.0)  # 10s cooldown
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
@@ -134,7 +134,7 @@ def test_navigate_cooldown_blocks_rapid_calls():
 
 def test_canvas_toggle():
     """canvas_toggle switches between CANVAS_ON and CANVAS_OFF."""
-    nav = Navigator(protected_apps=[], cooldown=0.0)
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
 
     with (
         patch.object(nav, "_get_active_workspace_id", return_value=1),
