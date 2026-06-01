@@ -20,8 +20,10 @@ def ctl_main() -> None:
     from canvas.ipc import send_command
 
     if len(sys.argv) < 2:
-        cmds = ("pan-start|pan-stop|nav-left|nav-right|toggle|"
-                 "canvas-toggle|edge-start|edge-stop|ping|status")
+        cmds = (
+            "pan-start|pan-stop|nav-left|nav-right|toggle|"
+            "canvas-toggle|edge-start|edge-stop|ping|status"
+        )
         print(f"Usage: canvas-ctl <{cmds}>", file=sys.stderr)
         sys.exit(1)
 

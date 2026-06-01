@@ -60,15 +60,19 @@ class DaemonState:
             for m in monitors:
                 if m.get("focused", False):
                     self.edge_scroll.set_monitor_rect(
-                        m.get("x", 0), m.get("y", 0),
-                        m.get("width", 1920), m.get("height", 1080),
+                        m.get("x", 0),
+                        m.get("y", 0),
+                        m.get("width", 1920),
+                        m.get("height", 1080),
                     )
                     return
             if monitors:
                 m = monitors[0]
                 self.edge_scroll.set_monitor_rect(
-                    m.get("x", 0), m.get("y", 0),
-                    m.get("width", 1920), m.get("height", 1080),
+                    m.get("x", 0),
+                    m.get("y", 0),
+                    m.get("width", 1920),
+                    m.get("height", 1080),
                 )
         except Exception as e:
             log.debug("fetch monitor rect failed: %s", e)

@@ -247,6 +247,7 @@ def test_handle_ipc_edge_start():
     ds = _make_daemon_state(ipc)
 
     import canvas.hypr as hypr_mod
+
     original_gcp = hypr_mod.get_cursor_pos
     hypr_mod.get_cursor_pos = lambda: (350, 350)
 

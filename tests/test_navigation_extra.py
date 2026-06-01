@@ -82,10 +82,12 @@ def test_get_focused_window_error():
 
 def test_get_monitor_center_focused():
     ipc = MagicMock()
-    ipc.send.return_value = json.dumps([
-        {"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080},
-        {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
-    ])
+    ipc.send.return_value = json.dumps(
+        [
+            {"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080},
+            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+        ]
+    )
     nav = _make_nav(ipc)
     cx, cy = nav._get_monitor_center()
     assert cx == 960
@@ -94,9 +96,11 @@ def test_get_monitor_center_focused():
 
 def test_get_monitor_center_fallback_first():
     ipc = MagicMock()
-    ipc.send.return_value = json.dumps([
-        {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
-    ])
+    ipc.send.return_value = json.dumps(
+        [
+            {"focused": False, "x": 1920, "y": 0, "width": 1920, "height": 1080},
+        ]
+    )
     nav = _make_nav(ipc)
     cx, cy = nav._get_monitor_center()
     assert cx == 2880
@@ -172,12 +176,14 @@ def test_safe_int_valid():
 
 def test_safe_int_invalid():
     import pytest
+
     with pytest.raises(ValueError, match="unsafe Lua value"):
         _safe_int("abc", "x")
 
 
 def test_safe_int_none():
     import pytest
+
     with pytest.raises(ValueError, match="unsafe Lua value"):
         _safe_int(None, "x")
 

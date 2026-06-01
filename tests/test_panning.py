@@ -142,8 +142,12 @@ def test_poller_alive_initially_true():
 
 def _start_edge(
     es: EdgeScrollState,
-    win_x: int, win_y: int, win_w: int = 500, win_h: int = 300,
-    cursor_offset_x: int = 250, cursor_offset_y: int = 150,
+    win_x: int,
+    win_y: int,
+    win_w: int = 500,
+    win_h: int = 300,
+    cursor_offset_x: int = 250,
+    cursor_offset_y: int = 150,
 ) -> None:
     cursor_x = win_x + cursor_offset_x
     cursor_y = win_y + cursor_offset_y
@@ -361,6 +365,7 @@ def test_edge_scroll_idle_timeout():
     es.update_cursor(1670, 540)
 
     import time
+
     es._last_move_time = time.monotonic() - 1.0
     assert es.check_idle_timeout() is True
     assert es.active is False
