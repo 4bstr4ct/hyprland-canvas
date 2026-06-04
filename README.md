@@ -18,22 +18,32 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Feature | Keybind | Description |
 |---------|---------|-------------|
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
-| Edge-scroll | SUPER+LMB | Drag window near screen edge — camera follows |
+| Edge-scroll | SUPER+LMB | Drag window past screen edge — camera follows |
 | Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
 
 ## Install
 
+**uv (recommended):**
 ```bash
 git clone https://github.com/4bstr4ct/hyprland-canvas.git
 cd hyprland-canvas
-
-# with uv (recommended)
 uv tool install .
+```
 
-# or with pip
-pip install .
+**pipx:**
+```bash
+git clone https://github.com/4bstr4ct/hyprland-canvas.git
+cd hyprland-canvas
+pipx install .
+```
+
+**Run from source (no install):**
+```bash
+git clone https://github.com/4bstr4ct/hyprland-canvas.git
+cd hyprland-canvas
+uv run canvasd
 ```
 
 This gives you two commands:
