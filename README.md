@@ -27,21 +27,21 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 
 **uv (recommended):**
 ```bash
-git clone https://github.com/4bstr4ct/hyprland-canvas.git
+git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
 uv tool install .
 ```
 
 **pipx:**
 ```bash
-git clone https://github.com/4bstr4ct/hyprland-canvas.git
+git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
 pipx install .
 ```
 
 **Run from source (no install):**
 ```bash
-git clone https://github.com/4bstr4ct/hyprland-canvas.git
+git clone https://github.com/zyrophix/hyprland-canvas.git
 cd hyprland-canvas
 uv run canvasd
 ```
