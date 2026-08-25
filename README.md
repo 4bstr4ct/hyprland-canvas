@@ -18,7 +18,7 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Feature | Keybind | Description |
 |---------|---------|-------------|
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
-| Edge-scroll | SUPER+LMB | Drag window past screen edge — camera follows |
+| Edge-scroll | SUPER+LMB | Drag a floating window past screen edge — camera follows (activates only when the drag starts on a floating window under the cursor) |
 | Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Invert | SUPER+SHIFT+G | Invert pan direction |

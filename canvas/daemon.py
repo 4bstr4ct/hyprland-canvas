@@ -49,15 +49,6 @@ class DaemonState:
         self.baseline_workspace: int | None = None
         self.edge_scroll_workspace: int | None = None
 
-    def _fetch_focused_window(self) -> dict[str, Any]:
-        """Get focused window info: address, position, size."""
-        try:
-            resp = self.ipc.send("j/activewindow")
-            w: dict[str, Any] = json.loads(resp)
-            return w
-        except Exception:
-            return {}
-
     def _fetch_monitor_rect(self) -> bool:
         """Fetch focused monitor geometry for edge-scroll. True on success."""
         try:
@@ -133,20 +124,59 @@ class DaemonState:
         self.navigator.navigate("right")
         return "OK"
 
+    def _find_window_at_cursor(self, cx: int, cy: int, workspace_id: int) -> dict[str, Any] | None:
+        """Floating window on the workspace whose rect contains the cursor.
+
+        Hyprland's window.drag() moves whatever is under the pointer, not
+        the previously focused window — geometry must come from the same
+        place. On overlap the last match wins (clients are listed
+        bottom-to-top-ish).
+        """
+        try:
+            resp = self.ipc.send("j/clients")
+            clients: list[dict[str, Any]] = json.loads(resp)
+        except Exception as e:
+            log.debug("find window at cursor failed: %s", e)
+            return None
+
+        found: dict[str, Any] | None = None
+        for w in clients:
+            if not w.get("floating"):
+                continue
+            wsw = w.get("workspace")
+            if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:
+                continue
+            addr = str(w.get("address", ""))
+            at = w.get("at", [0, 0])
+            size = w.get("size", [0, 0])
+            if not addr or len(at) < 2 or len(size) < 2:
+                continue
+            if at[0] <= cx < at[0] + size[0] and at[1] <= cy < at[1] + size[1]:
+                found = w
+        return found
+
     def _handle_edge_start(self) -> str:
-        win = self._fetch_focused_window()
-        addr = str(win.get("address", ""))
-        if not addr:
-            return "EDGE_NO_WINDOW"
-        at = win.get("at", [0, 0])
-        size = win.get("size", [0, 0])
+        """Activate edge-scroll for the floating window under the cursor."""
         try:
             cx, cy = get_cursor_pos()
         except Exception:
             return "EDGE_NO_CURSOR"
+
         ws_id = self._get_active_workspace_id()
         if ws_id is None:
             return "EDGE_NO_WORKSPACE"
+
+        win = self._find_window_at_cursor(cx, cy, ws_id)
+        if win is None:
+            # Nothing draggable under the pointer: empty desktop, a tiled
+            # window, or a stale-focused window that sits off-screen.
+            # Activating here would derive bogus grab offsets and send the
+            # camera chasing an invisible window.
+            return "EDGE_NO_WINDOW"
+
+        at = win.get("at", [0, 0])
+        size = win.get("size", [0, 0])
+
         self.edge_scroll_workspace = ws_id
         if not self._fetch_monitor_rect():
             # Without real geometry the overflow math would run against a
@@ -155,7 +185,7 @@ class DaemonState:
             return "EDGE_NO_MONITOR"
         return self.edge_scroll.start(
             EdgeScrollParams(
-                dragged_addr=addr,
+                dragged_addr=str(win.get("address", "")),
                 win_x=at[0] if len(at) >= 2 else 0,
                 win_y=at[1] if len(at) >= 2 else 0,
                 win_w=size[0] if len(size) >= 2 else 0,
