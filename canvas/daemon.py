@@ -58,8 +58,8 @@ class DaemonState:
         except Exception:
             return {}
 
-    def _fetch_monitor_rect(self) -> None:
-        """Fetch focused monitor geometry for edge-scroll."""
+    def _fetch_monitor_rect(self) -> bool:
+        """Fetch focused monitor geometry for edge-scroll. True on success."""
         try:
             resp = self.ipc.send("j/monitors")
             monitors: list[dict[str, Any]] = json.loads(resp)
@@ -71,7 +71,7 @@ class DaemonState:
                         m.get("width", 1920),
                         m.get("height", 1080),
                     )
-                    return
+                    return True
             if monitors:
                 m = monitors[0]
                 self.edge_scroll.set_monitor_rect(
@@ -80,8 +80,10 @@ class DaemonState:
                     m.get("width", 1920),
                     m.get("height", 1080),
                 )
+                return True
         except Exception as e:
             log.debug("fetch monitor rect failed: %s", e)
+        return False
 
     def _get_active_workspace_id(self) -> int | None:
         """Active workspace id, or None when the query fails."""
@@ -146,7 +148,11 @@ class DaemonState:
         if ws_id is None:
             return "EDGE_NO_WORKSPACE"
         self.edge_scroll_workspace = ws_id
-        self._fetch_monitor_rect()
+        if not self._fetch_monitor_rect():
+            # Without real geometry the overflow math would run against a
+            # default 1920x1080 rect — on multi-monitor setups that causes
+            # phantom scrolling at wrong edges. Refuse instead.
+            return "EDGE_NO_MONITOR"
         return self.edge_scroll.start(
             EdgeScrollParams(
                 dragged_addr=addr,

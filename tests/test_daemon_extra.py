@@ -157,3 +157,27 @@ def test_shutdown_restores_only_when_pan_still_active():
     ds.handle_ipc("PAN_STOP")
     ds.restore_baselines()
     ipc.eval_lua.assert_not_called()
+
+
+# --- monitor rect fail-safe ---
+
+
+def test_fetch_monitor_rect_returns_bool():
+    ipc = MagicMock()
+    ipc.send.return_value = '[{"focused":true,"x":0,"y":0,"width":2560,"height":1440}]'
+    ds = _make_daemon_state(ipc)
+    assert ds._fetch_monitor_rect() is True
+
+
+def test_fetch_monitor_rect_error_returns_false():
+    ipc = MagicMock()
+    ipc.send.side_effect = ConnectionError("fail")
+    ds = _make_daemon_state(ipc)
+    assert ds._fetch_monitor_rect() is False
+
+
+def test_fetch_monitor_rect_empty_list_returns_false():
+    ipc = MagicMock()
+    ipc.send.return_value = "[]"
+    ds = _make_daemon_state(ipc)
+    assert ds._fetch_monitor_rect() is False

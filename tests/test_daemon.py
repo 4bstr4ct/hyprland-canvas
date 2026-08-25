@@ -337,6 +337,23 @@ def test_handle_ipc_edge_start_no_window():
     assert result == "EDGE_NO_WINDOW"
 
 
+def test_handle_ipc_edge_start_no_monitor():
+    """EDGE_START without monitor geometry must not activate edge-scroll."""
+    ipc = MagicMock()
+    ipc.send.side_effect = [
+        '{"address":"0xabc","at":[100,200],"size":[500,300]}',
+        json.dumps({"id": 3}),
+        Exception("monitors query failed"),
+    ]
+    ds = _make_daemon_state(ipc)
+
+    with patch("canvas.daemon.get_cursor_pos", return_value=(350, 350)):
+        result = ds.handle_ipc("EDGE_START")
+
+    assert result == "EDGE_NO_MONITOR"
+    assert ds.edge_scroll.active is False
+
+
 def test_handle_ipc_edge_stop():
     """EDGE_STOP deactivates edge-scroll."""
     ds = _make_daemon_state()

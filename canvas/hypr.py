@@ -3,22 +3,22 @@
 Hyprland's .socket.sock speaks a one-shot request-response protocol:
   connect → send b"<command>" → read response until EOF → close
 
-The server closes the connection after each response, so we can't
-multiplex multiple commands on one socket. The module keeps a
-pre-connected socket for zero-latency first send and reconnects
-automatically on error. Thread-safe via lock.
+The server closes the connection after each response, so every send()
+opens a fresh connection. On a local Unix socket that costs ~0.1ms —
+negligible next to the compositor round-trip. Thread-safe via lock.
 
 WARNING: Hyprland processes IPC synchronously — an unclosed connection
 freezes the compositor for up to 5 seconds. Always close promptly.
 """
 
-import contextlib
 import logging
 import os
 import socket
 import threading
 
 log = logging.getLogger("canvas.hypr")
+
+_MAX_RESPONSE = 16 * 1024 * 1024  # j/clients can be large; this is generous
 
 
 def _hypr_socket_path() -> str:
@@ -37,7 +37,7 @@ def _hypr_socket_path() -> str:
 
 
 class HyprIPC:
-    """Thread-safe Hyprland IPC client with persistent socket.
+    """Thread-safe one-shot Hyprland IPC client.
 
     Encapsulates connection state as instance attributes instead of
     module globals, enabling testability via dependency injection.
@@ -45,7 +45,6 @@ class HyprIPC:
 
     def __init__(self, socket_path: str) -> None:
         self._socket_path = socket_path
-        self._socket: socket.socket | None = None
         self._lock = threading.Lock()
 
     @classmethod
@@ -68,30 +67,17 @@ class HyprIPC:
             if not chunk:
                 break
             resp += chunk
+            if len(resp) > _MAX_RESPONSE:
+                raise ConnectionError("Hyprland response exceeded size limit")
         return resp.decode().strip()
 
     def send(self, command: str) -> str:
-        """Send a command to Hyprland IPC socket, return response string.
+        """Send a command to the Hyprland IPC socket, return response string.
 
-        Uses persistent connection when possible, reconnects on error.
-        Thread-safe via lock.
+        One fresh connection per command (the server closes after each
+        response). Thread-safe via lock.
         """
         with self._lock:
-            if self._socket is not None:
-                try:
-                    self._socket.sendall(command.encode())
-                    self._socket.shutdown(socket.SHUT_WR)
-                    resp = self._recv_response(self._socket)
-                    self._socket.close()
-                    self._socket = None
-                    return resp
-                except Exception as e:
-                    log.debug("persistent socket failed, reconnecting: %s", e)
-                    with contextlib.suppress(Exception):
-                        if self._socket is not None:
-                            self._socket.close()
-                    self._socket = None
-
             s = self._connect()
             try:
                 s.sendall(command.encode())

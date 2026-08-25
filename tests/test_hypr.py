@@ -48,23 +48,37 @@ def test_get_cursor_pos_parses_response():
     assert y == 200
 
 
-def test_send_reconnects_on_error():
-    """send() recovers from stale persistent socket by reconnecting."""
-    ipc = HyprIPC("/tmp/test.sock")
-
-    broken = MagicMock()
-    broken.sendall.side_effect = ConnectionError("broken")
-    broken.close.return_value = None
-    ipc._socket = broken
-
-    fresh = MagicMock()
-    fresh.recv.side_effect = [b"recovered", b""]
-    ipc._connect = lambda: fresh  # type: ignore[assignment]
+def test_send_closes_socket_after_response():
+    """send() always closes the connection (server closes after each response)."""
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [b"ok", b""]
+    ipc = _make_ipc_with_mock(mock_sock)
 
     result = ipc.send("cursorpos")
 
-    assert result == "recovered"
-    broken.close.assert_called_once()
+    assert result == "ok"
+    mock_sock.close.assert_called_once()
+
+
+def test_send_response_size_limit():
+    """An oversized response aborts instead of consuming unbounded memory."""
+    import canvas.hypr as hypr_mod
+
+    mock_sock = MagicMock()
+    chunk = b"x" * 4096
+    mock_sock.recv.side_effect = lambda *_: chunk  # never returns EOF
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    original = hypr_mod._MAX_RESPONSE
+    hypr_mod._MAX_RESPONSE = 8192
+    try:
+        try:
+            ipc.send("j/clients")
+            raise AssertionError("should have raised ConnectionError")
+        except ConnectionError as e:
+            assert "size limit" in str(e)
+    finally:
+        hypr_mod._MAX_RESPONSE = original
 
 
 def test_module_level_send_delegates_to_default():
