@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from canvas.navigation import Navigator
@@ -132,18 +133,99 @@ def test_navigate_cooldown_blocks_rapid_calls():
         assert mock_pan.call_count == 1
 
 
-def test_canvas_toggle():
-    """canvas_toggle switches between CANVAS_ON and CANVAS_OFF."""
-    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+def test_canvas_toggle_on_records_tiled_snapshot():
+    """Canvas ON records which windows were tiled so OFF can restore exactly them."""
+    ipc = MagicMock()
+    windows = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+        _make_window("kitty", "0x2", 0, 0, 100, 100, floating=True),
+    ]
+    ipc.send.return_value = json.dumps(windows)
 
     with (
-        patch.object(nav, "_get_active_workspace_id", return_value=1),
-        patch.object(nav, "_set_all_floating"),
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save") as msave,
     ):
-        result1 = nav.canvas_toggle()
-        assert result1 == "CANVAS_ON"
-        assert 1 in nav._canvas_mode_workspaces
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
 
-        result2 = nav.canvas_toggle()
-        assert result2 == "CANVAS_OFF"
+        assert nav._canvas_mode_workspaces[1] == {"0x1"}
+        lua = ipc.eval_lua.call_args[0][0]
+        assert "floating = false" in lua
+        msave.assert_called_once()
+
+
+def test_canvas_toggle_off_restores_only_snapshot():
+    """Windows that became floating DURING canvas mode must not be tiled on OFF."""
+    pre_canvas = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    during_canvas = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=True),
+        _make_window("kitty", "0x3", 0, 0, 100, 100, floating=True),  # floated by user later
+    ]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(pre_canvas)
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+
+            ipc.send.return_value = json.dumps(during_canvas)
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
         assert 1 not in nav._canvas_mode_workspaces
+        off_lua = ipc.eval_lua.call_args[0][0]
+        assert '"0x1"' in off_lua
+        assert '"0x3"' not in off_lua
+        assert 'action = "toggle"' in off_lua
+
+
+def test_canvas_toggle_off_with_empty_snapshot_skips_ipc():
+    """Enabling canvas on an all-floating workspace → OFF tiles nothing."""
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [_make_window("kitty", "0x2", 0, 0, 100, 100, floating=True)]
+    )
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+            ipc.reset_mock()
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+        ipc.eval_lua.assert_not_called()
+
+
+def test_canvas_toggle_after_restart_is_safe():
+    """Restored state from disk → first press acts as OFF and tiles only the snapshot."""
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(
+        [
+            _make_window("kitty", "0x1", 0, 0, 100, 100, floating=True),
+            _make_window("kitty", "0x9", 0, 0, 100, 100, floating=True),
+        ]
+    )
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={1: ["0x1"]}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            # Old bug: this press returned CANVAS_ON (state lost) and the NEXT
+            # press tiled everything. Now the snapshot survives restarts.
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+        lua = ipc.eval_lua.call_args[0][0]
+        assert '"0x1"' in lua
+        assert '"0x9"' not in lua

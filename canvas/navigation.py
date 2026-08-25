@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any
 
+from canvas import toggle_state
 from canvas.hypr import HyprIPC
 
 log = logging.getLogger("canvas.navigation")
@@ -39,7 +40,13 @@ class Navigator:
         self._protected_apps = [a.lower() for a in protected_apps]
         self._cooldown = cooldown
         self._last_nav_time = 0.0
-        self._canvas_mode_workspaces: set[int] = set()
+        # workspace id -> addresses that were TILED before canvas mode went on.
+        # Only these are tiled again on OFF, so windows the user kept floating
+        # before enabling canvas mode are never touched.
+        loaded = toggle_state.load()
+        self._canvas_mode_workspaces: dict[int, set[str]] = {
+            ws: set(addrs) for ws, addrs in loaded.items()
+        }
 
     def navigate(self, direction: str) -> None:
         """Navigate to the next/prev floating window, panning the canvas to center it."""
@@ -91,27 +98,74 @@ class Navigator:
         floating_updated = self._get_floating_windows(workspace_id)
         self._pan_to_window(floating_updated, floating[new_index]["address"], center_x, center_y)
 
+    def _persist_canvas_state(self) -> None:
+        toggle_state.save({ws: sorted(a) for ws, a in self._canvas_mode_workspaces.items()})
+
     def canvas_toggle(self) -> str:
         workspace_id = self._get_active_workspace_id()
         if workspace_id is None:
             return "ERROR:NO_WORKSPACE"
 
         if workspace_id in self._canvas_mode_workspaces:
-            self._canvas_mode_workspaces.discard(workspace_id)
-            self._set_all_floating(workspace_id, floating=False)
+            snapshot = self._canvas_mode_workspaces.pop(workspace_id)
+            self._persist_canvas_state()
+            if snapshot:
+                self._tile_windows(workspace_id, snapshot)
+                return "CANVAS_OFF"
+            # Canvas was enabled on an already all-floating workspace:
+            # nothing to tile back, and that is not an error.
             return "CANVAS_OFF"
-        else:
-            self._canvas_mode_workspaces.add(workspace_id)
-            self._set_all_floating(workspace_id, floating=True)
-            return "CANVAS_ON"
+
+        tiled_addrs = self._snapshot_tiled_windows(workspace_id)
+        self._canvas_mode_workspaces[workspace_id] = tiled_addrs
+        self._persist_canvas_state()
+        self._set_all_floating(workspace_id, floating=True)
+        return "CANVAS_ON"
+
+    def _snapshot_tiled_windows(self, workspace_id: int) -> set[str]:
+        """Addresses of currently tiled windows on the workspace (pre-canvas state)."""
+        try:
+            resp = self._ipc.send("j/clients")
+            clients: list[dict[str, Any]] = json.loads(resp)
+            return {
+                w["address"]
+                for w in clients
+                if not w.get("floating")
+                and w.get("address")
+                and (ws := w.get("workspace")) is not None
+                and ws.get("id") == workspace_id
+            }
+        except Exception as e:
+            log.warning("snapshot tiled windows failed: %s", e)
+            return set()
+
+    def _tile_windows(self, workspace_id: int, addresses: set[str]) -> None:
+        """Tile exactly the windows recorded in the snapshot, leaving others floating."""
+        safe_addrs = [a for a in addresses if _VALID_ADDR.match(a)]
+        if not safe_addrs:
+            return
+        ws_id = _safe_int(workspace_id, "workspace_id")
+        lines = ["local targets = {"]
+        lines.extend(f'  ["{a}"] = true,' for a in sorted(safe_addrs))
+        lines.append("}")
+        lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
+        lines.append("for _, w in ipairs(ws) do")
+        lines.append("  if targets[tostring(w.address)] then")
+        lines.append("    hl.dispatch(hl.dsp.focus({ window = w }))")
+        lines.append('    hl.dispatch(hl.dsp.window.float({ action = "toggle" }))')
+        lines.append("  end")
+        lines.append("end")
+        try:
+            self._ipc.eval_lua("\n".join(lines))
+        except Exception as e:
+            log.warning("tile windows failed: %s", e)
 
     def _set_all_floating(self, workspace_id: int, floating: bool) -> None:
-        """Toggle all windows on workspace to floating or tiled.
+        """Make every currently-tiled window on the workspace floating (canvas ON).
 
-        When floating=True (make all floating): queries non-floating windows
-        via { floating = false } filter, then toggles each → they become floating.
-        When floating=False (make all tiled): queries floating windows
-        via { floating = true } filter, then toggles each → they become tiled.
+        The inverse is intentionally NOT done here: turning canvas off must
+        tile only the windows recorded in the snapshot (_tile_windows), so
+        windows that were already floating before canvas mode survive.
         """
         try:
             ws_id = _safe_int(workspace_id, "workspace_id")

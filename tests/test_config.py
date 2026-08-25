@@ -163,3 +163,39 @@ def test_load_raises_config_error_listing_problems():
 def test_load_valid_partial_config_passes():
     cfg = _load_yaml("speed: 2.5\n")
     assert cfg["speed"] == 2.5
+
+
+# --- toggle_state persistence ---
+
+
+def test_toggle_state_roundtrip(tmp_path):
+    from canvas.toggle_state import load as ts_load
+    from canvas.toggle_state import save as ts_save
+
+    file = str(tmp_path / "toggle.json")
+    state = {1: ["0xabc", "0x2"], 7: ["0xfff"]}
+    ts_save(state, path=file)
+    loaded = ts_load(path=file)
+    assert {ws: set(addrs) for ws, addrs in loaded.items()} == {
+        ws: set(addrs) for ws, addrs in state.items()
+    }
+
+
+def test_toggle_state_load_missing_file(tmp_path):
+    from canvas.toggle_state import load as ts_load
+
+    assert ts_load(path=str(tmp_path / "absent.json")) == {}
+
+
+def test_toggle_state_load_corrupt_file(tmp_path):
+    import logging
+
+    logging.disable(logging.CRITICAL)
+    from canvas.toggle_state import load as ts_load
+
+    file = tmp_path / "bad.json"
+    file.write_text("{not json")
+    try:
+        assert ts_load(path=str(file)) == {}
+    finally:
+        logging.disable(logging.NOTSET)
