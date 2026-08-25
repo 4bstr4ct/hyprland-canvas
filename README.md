@@ -50,6 +50,15 @@ This gives you two commands:
 - `canvasd` — the daemon
 - `canvas-ctl` — send commands to the daemon
 
+## Updating
+
+After pulling new code, reinstall and restart the daemon — an old installed copy keeps running until you do:
+
+```bash
+git pull
+uv tool install . --force --reinstall   # or: pipx install . --force
+```
+
 ## Usage
 
 ### 1. Start the daemon
