@@ -10,9 +10,14 @@ import sys
 
 def daemon_main() -> None:
     """Entry point for `canvasd`."""
+    from canvas.config import ConfigError
     from canvas.daemon import run
 
-    run()
+    try:
+        run()
+    except ConfigError as exc:
+        print(f"Invalid configuration:\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def ctl_main() -> None:

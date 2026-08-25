@@ -3,9 +3,14 @@
 import copy
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import yaml
+
+
+class ConfigError(Exception):
+    """Raised when the configuration contains invalid values."""
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "speed": 1.6,
@@ -48,6 +53,62 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _is_num(value: object) -> TypeGuard[int | float]:
+    """True for int/float but not bool (bool is an int subclass in Python)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def validate(cfg: dict[str, Any]) -> list[str]:
+    """Validate configuration values. Returns a list of human-readable problems.
+
+    An empty list means the config is safe to run with.
+    """
+    errors: list[str] = []
+
+    speed = cfg.get("speed")
+    if not _is_num(speed) or speed <= 0:
+        errors.append(f"speed must be a number > 0, got {speed!r}")
+
+    max_speed = cfg.get("max_speed")
+    if max_speed is not None and (not _is_num(max_speed) or max_speed <= 0):
+        errors.append(f"max_speed must be a number > 0 or null, got {max_speed!r}")
+
+    nav = cfg.get("navigation")
+    if not isinstance(nav, dict):
+        errors.append("navigation section must be a mapping")
+    else:
+        cooldown = nav.get("cooldown")
+        if not _is_num(cooldown) or cooldown < 0:
+            errors.append(f"navigation.cooldown must be a number >= 0, got {cooldown!r}")
+        apps = nav.get("protected_apps")
+        if not isinstance(apps, list) or not all(isinstance(a, str) for a in apps):
+            errors.append("navigation.protected_apps must be a list of strings")
+
+    invert = cfg.get("invert")
+    if not isinstance(invert, dict):
+        errors.append("invert section must be a mapping")
+    elif not isinstance(invert.get("enabled"), bool):
+        errors.append(f"invert.enabled must be a boolean, got {invert.get('enabled')!r}")
+
+    es = cfg.get("edge_scroll")
+    if not isinstance(es, dict):
+        errors.append("edge_scroll section must be a mapping")
+    else:
+        rd = es.get("ramp_distance")
+        if not isinstance(rd, int) or isinstance(rd, bool) or rd <= 0:
+            errors.append(f"edge_scroll.ramp_distance must be an integer > 0, got {rd!r}")
+        es_speed = es.get("speed")
+        if not _is_num(es_speed) or es_speed <= 0:
+            errors.append(f"edge_scroll.speed must be a number > 0, got {es_speed!r}")
+        es_max = es.get("max_speed")
+        if es_max is not None and (not _is_num(es_max) or es_max <= 0):
+            errors.append(f"edge_scroll.max_speed must be a number > 0 or null, got {es_max!r}")
+        if not isinstance(es.get("enabled"), bool):
+            errors.append(f"edge_scroll.enabled must be a boolean, got {es.get('enabled')!r}")
+
+    return errors
+
+
 def load(path: str | None = None, skip_user: bool = False) -> dict[str, Any]:
     """Load config from YAML file, merging with defaults.
 
@@ -72,6 +133,14 @@ def load(path: str | None = None, skip_user: bool = False) -> dict[str, Any]:
         if os.path.isfile(candidate):
             with open(candidate) as f:
                 user_cfg = yaml.safe_load(f) or {}
-            return _deep_merge(DEFAULT_CONFIG, user_cfg)
+            cfg = _deep_merge(DEFAULT_CONFIG, user_cfg)
+            problems = validate(cfg)
+            if problems:
+                raise ConfigError("\n".join(problems))
+            return cfg
 
-    return copy.deepcopy(DEFAULT_CONFIG)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    problems = validate(cfg)
+    if problems:
+        raise ConfigError("\n".join(problems))
+    return cfg

@@ -1,7 +1,9 @@
 import os
 import tempfile
 
-from canvas.config import DEFAULT_CONFIG, load
+import pytest
+
+from canvas.config import DEFAULT_CONFIG, ConfigError, load, validate
 
 
 def test_load_default_config_when_no_file():
@@ -73,3 +75,91 @@ def test_deep_merge_does_not_mutate_defaults():
     # But DEFAULT_CONFIG is untouched
     assert dc["speed"] == original_speed
     assert dc["navigation"]["protected_apps"] == original_protected
+
+
+# --- validation ---
+
+
+def _load_yaml(content: str):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        f.write(content)
+        f.flush()
+        name = f.name
+    try:
+        return load(name)
+    finally:
+        os.unlink(name)
+
+
+def test_validate_default_config_has_no_problems():
+    import copy
+
+    assert validate(copy.deepcopy(DEFAULT_CONFIG)) == []
+
+
+def test_validate_rejects_zero_speed():
+    problems = validate({"speed": 0})
+    assert any("speed" in p for p in problems)
+
+
+def test_validate_rejects_string_speed():
+    problems = validate({"speed": "abc"})
+    assert any("speed" in p for p in problems)
+
+
+def test_validate_rejects_bool_speed():
+    """bool is not a valid number for config purposes."""
+    problems = validate({"speed": True})
+    assert any("speed" in p for p in problems)
+
+
+def test_validate_rejects_negative_max_speed():
+    problems = validate({"speed": 1.0, "max_speed": -5})
+    assert any("max_speed" in p for p in problems)
+
+
+def test_validate_allows_null_max_speed():
+    problems = validate({"speed": 1.0, "max_speed": None})
+    assert not any("max_speed" in p for p in problems)
+
+
+def test_validate_rejects_negative_cooldown():
+    problems = validate({"speed": 1.0, "navigation": {"cooldown": -1}})
+    assert any("cooldown" in p for p in problems)
+
+
+def test_validate_rejects_non_list_protected_apps():
+    problems = validate({"speed": 1.0, "navigation": {"protected_apps": "firefox"}})
+    assert any("protected_apps" in p for p in problems)
+
+
+def test_validate_rejects_non_dict_section():
+    problems = validate({"speed": 1.0, "invert": None})
+    assert any("invert" in p for p in problems)
+
+
+def test_validate_rejects_zero_ramp_distance():
+    problems = validate(
+        {"speed": 1.0, "edge_scroll": {"ramp_distance": 0, "speed": 20.0, "enabled": True}}
+    )
+    assert any("ramp_distance" in p for p in problems)
+
+
+def test_validate_rejects_float_ramp_distance():
+    problems = validate(
+        {"speed": 1.0, "edge_scroll": {"ramp_distance": 50.5, "speed": 20.0, "enabled": True}}
+    )
+    assert any("ramp_distance" in p for p in problems)
+
+
+def test_load_raises_config_error_listing_problems():
+    with pytest.raises(ConfigError) as exc_info:
+        _load_yaml("speed: -1\ninvert:\n  enabled: maybe\n")
+    msg = str(exc_info.value)
+    assert "speed" in msg
+    assert "invert.enabled" in msg
+
+
+def test_load_valid_partial_config_passes():
+    cfg = _load_yaml("speed: 2.5\n")
+    assert cfg["speed"] == 2.5
