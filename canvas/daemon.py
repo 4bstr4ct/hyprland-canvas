@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from canvas import debug
 from canvas.config import load
 from canvas.hypr import HyprIPC, get_cursor_pos
 from canvas.ipc import IpcServer, acquire_singleton
@@ -104,16 +105,22 @@ class DaemonState:
         handler_name = self._IPC_DISPATCH.get(cmd)
         if handler_name is not None:
             handler: Callable[[], str] = getattr(self, handler_name)
-            return handler()
+            result = handler()
+            debug.dbg("CMD", cmd=cmd, result=result)
+            return result
+        debug.dbg("CMD", cmd=cmd, result="UNKNOWN")
         return f"UNKNOWN: {cmd}"
 
     def _handle_pan_start(self) -> str:
         self.fetch_baselines()
-        return self.panning.start_pan()
+        result = self.panning.start_pan()
+        debug.dbg("PAN_START", baselines=len(self.baselines), result=result)
+        return result
 
     def _handle_pan_stop(self) -> str:
         self.panning.stop_pan()
         self.baselines = {}
+        debug.dbg("PAN_STOP")
         return "PAN_OFF"
 
     def _handle_nav_left(self) -> str:
@@ -169,11 +176,13 @@ class DaemonState:
         """Activate edge-scroll for the floating window under the cursor."""
         try:
             cx, cy = get_cursor_pos()
-        except Exception:
+        except Exception as e:
+            debug.dbg("EDGE_START_DECISION", verdict="NO_CURSOR", error=str(e))
             return "EDGE_NO_CURSOR"
 
         ws_id = self._get_active_workspace_id()
         if ws_id is None:
+            debug.dbg("EDGE_START_DECISION", cursor=(cx, cy), verdict="NO_WORKSPACE")
             return "EDGE_NO_WORKSPACE"
 
         win = self._find_window_at_cursor(cx, cy, ws_id)
@@ -182,27 +191,45 @@ class DaemonState:
             # window, or a stale-focused window that sits off-screen.
             # Activating here would derive bogus grab offsets and send the
             # camera chasing an invisible window.
-            return "EDGE_NO_WINDOW"
-
-        # A real grab makes Hyprland focus the pressed window. If focus is
-        # elsewhere, this press landed on a border/gap inside the window's
-        # bounding rect — no drag will engage. Refuse before arming.
-        candidate_addr = str(win.get("address", ""))
-        if self._get_focused_window_address() != candidate_addr:
+            debug.dbg(
+                "EDGE_START_DECISION",
+                cursor=(cx, cy),
+                ws=ws_id,
+                candidate=None,
+                verdict="NO_WINDOW_UNDER_CURSOR",
+            )
             return "EDGE_NO_WINDOW"
 
         at = win.get("at", [0, 0])
         size = win.get("size", [0, 0])
+        candidate_addr = str(win.get("address", ""))
+
+        # A real grab makes Hyprland focus the pressed window. If focus is
+        # elsewhere, this press landed on a border/gap inside the window's
+        # bounding rect — no drag will engage. Refuse before arming.
+        focused_addr = self._get_focused_window_address()
+        if focused_addr != candidate_addr:
+            debug.dbg(
+                "EDGE_START_DECISION",
+                cursor=(cx, cy),
+                ws=ws_id,
+                candidate=candidate_addr,
+                focused=focused_addr,
+                verdict="REFUSED_FOCUS_MISMATCH",
+            )
+            return "EDGE_NO_WINDOW"
 
         self.edge_scroll_workspace = ws_id
         if not self._fetch_monitor_rect():
             # Without real geometry the overflow math would run against a
             # default 1920x1080 rect — on multi-monitor setups that causes
             # phantom scrolling at wrong edges. Refuse instead.
+            debug.dbg("EDGE_START_DECISION", candidate=candidate_addr, verdict="NO_MONITOR")
             return "EDGE_NO_MONITOR"
-        return self.edge_scroll.start(
+
+        result = self.edge_scroll.start(
             EdgeScrollParams(
-                dragged_addr=str(win.get("address", "")),
+                dragged_addr=candidate_addr,
                 win_x=at[0] if len(at) >= 2 else 0,
                 win_y=at[1] if len(at) >= 2 else 0,
                 win_w=size[0] if len(size) >= 2 else 0,
@@ -211,9 +238,20 @@ class DaemonState:
                 cursor_y=cy,
             )
         )
+        debug.dbg(
+            "EDGE_START_DECISION",
+            cursor=(cx, cy),
+            ws=ws_id,
+            candidate=candidate_addr,
+            focused=focused_addr,
+            verdict=result,
+        )
+        return result
 
     def _handle_edge_stop(self) -> str:
-        return self.edge_scroll.stop()
+        result = self.edge_scroll.stop()
+        debug.dbg("EDGE_STOP", verdict=result)
+        return result
 
     def _handle_toggle(self) -> str:
         self.panning.inverted = not self.panning.inverted
@@ -364,10 +402,18 @@ class DaemonState:
 
 def run() -> None:
     """Main entry point for the canvas daemon."""
-    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+    debug.enable_from_env()
+    logging.basicConfig(
+        level=logging.DEBUG if debug.enabled() else logging.INFO,
+        format="%(name)s: %(message)s",
+    )
+    if debug.enabled():
+        import os
 
-    cfg = load()
+        debug.dbg("BOOT", pid=os.getpid())
+
     log.info("loading config...")
+    cfg = load()
 
     ipc = HyprIPC.from_env()
     state = PanningState(speed=cfg["speed"], max_speed=cfg.get("max_speed"))

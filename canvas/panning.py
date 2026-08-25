@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from canvas import hypr
+from canvas import debug, hypr
 
 log = logging.getLogger("canvas.panning")
 
@@ -132,6 +132,7 @@ class PanningState:
                 self._prev_y = None
                 self._total_dx = 0.0
                 self._total_dy = 0.0
+                debug.dbg("PAN_IDLE_TIMEOUT")
                 return True
             return False
 
@@ -180,6 +181,8 @@ class EdgeScrollState:
         self.grab_dead_zone = grab_dead_zone
         self._active = False
         self._dragged_addr: str = ""
+        self._session = 0
+        self._last_geo: tuple[int, int, int, int] | None = None
         self._monitor_x = 0
         self._monitor_y = 0
         self._monitor_w = 1920
@@ -203,6 +206,23 @@ class EdgeScrollState:
             return self._dragged_addr
 
     @property
+    def session(self) -> int:
+        with self._lock:
+            return self._session
+
+    @property
+    def pending_preview(self) -> tuple[int, int]:
+        """Rounded pending delta without consuming (for diagnostics)."""
+        with self._lock:
+            return int(round(self._pending_dx)), int(round(self._pending_dy))
+
+    @property
+    def last_geometry(self) -> tuple[int, int, int, int] | None:
+        """Last real geometry fed via update_geometry (for diagnostics)."""
+        with self._lock:
+            return self._last_geo
+
+    @property
     def confirmed_drag(self) -> bool:
         with self._lock:
             return self._confirmed_drag
@@ -221,9 +241,11 @@ class EdgeScrollState:
                 return "EDGE_DISABLED"
             self._active = True
             self._dragged_addr = params.dragged_addr
+            self._session += 1
             self._grab_x = params.win_x
             self._grab_y = params.win_y
             self._confirmed_drag = False
+            self._last_geo = None
             self._pending_dx = 0.0
             self._pending_dy = 0.0
             self._last_move_time = time.monotonic()
@@ -247,6 +269,13 @@ class EdgeScrollState:
 
             if addr != self._dragged_addr:
                 # Focus left the grabbed window mid-press: no real drag.
+                debug.dbg(
+                    "EDGE_DISARM",
+                    s=self._session,
+                    reason="focus_mismatch",
+                    grabbed=self._dragged_addr,
+                    now=addr,
+                )
                 log.debug("edge-scroll lost dragged window %s (now %s)", self._dragged_addr, addr)
                 self._active = False
                 self._dragged_addr = ""
@@ -255,12 +284,21 @@ class EdgeScrollState:
                 self._pending_dy = 0.0
                 return
 
+            self._last_geo = (x, y, w, h)
+
             # Click-vs-drag threshold (driftwm uses 5px): until the window
             # itself moved beyond it, this is still just a press.
             if not self._confirmed_drag:
-                if max(abs(x - self._grab_x), abs(y - self._grab_y)) < self.grab_dead_zone:
+                moved = max(abs(x - self._grab_x), abs(y - self._grab_y))
+                if moved < self.grab_dead_zone:
                     return
                 self._confirmed_drag = True
+                debug.dbg(
+                    "EDGE_CONFIRMED",
+                    s=self._session,
+                    moved=moved,
+                    geo=(x, y, w, h),
+                )
 
             mx, my = self._monitor_x, self._monitor_y
             mw, mh = self._monitor_w, self._monitor_h
@@ -314,6 +352,7 @@ class EdgeScrollState:
         """Auto-stop if no real scroll activity for _IDLE_TIMEOUT."""
         with self._lock:
             if self._active and (time.monotonic() - self._last_move_time) > self._IDLE_TIMEOUT:
+                debug.dbg("EDGE_DISARM", s=self._session, reason="idle_timeout")
                 self._active = False
                 self._dragged_addr = ""
                 self._confirmed_drag = False
@@ -330,6 +369,7 @@ def cursor_poller(
 ) -> None:
     """Poll cursor at ~60Hz; while edge-scrolling also poll real window geometry."""
     err_count = 0
+    last_tick_log = 0.0
     while not stop_event.is_set():
         try:
             x, y = hypr.get_cursor_pos()
@@ -338,6 +378,18 @@ def cursor_poller(
                 geo = hypr.get_active_window_geometry()
                 if geo is not None:
                     edge_scroll.update_geometry(*geo)
+                now = time.monotonic()
+                if debug.enabled() and now - last_tick_log >= 0.1:
+                    last_tick_log = now
+                    debug.dbg(
+                        "EDGE_SESSION_TICK",
+                        s=edge_scroll.session,
+                        addr=geo[0] if geo else None,
+                        geo=edge_scroll.last_geometry,
+                        cursor=(x, y),
+                        confirmed=edge_scroll.confirmed_drag,
+                        pending=edge_scroll.pending_preview,
+                    )
             err_count = 0
         except Exception as e:
             err_count += 1

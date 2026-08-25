@@ -159,6 +159,21 @@ Key design decisions:
 - **Ground-truth edge pan** — modeled after compositor-level implementations (driftwm, hevel): the camera assists only while a *confirmed* drag (window under cursor + focus match + moved past `grab_dead_zone`) pushes the window into the edge zone. The dragged window's real geometry is polled from Hyprland every frame — no cursor-derived guessing, so clicks on borders/gaps or holds without movement never move the camera
 - **Idle timeout** (500ms) — auto-stops panning if Hyprland drops a mouse release event during active drag
 
+## Debugging
+
+Run the daemon with structured tracing to diagnose input/camera issues:
+
+```bash
+CANVAS_DEBUG=1 canvasd 2>&1 | tee /tmp/canvas-debug.log
+```
+
+Trace lines are `<seconds> EVENT key=value …`. Useful events:
+
+- `EDGE_START_DECISION` — why edge-scroll armed or was refused (`candidate`, `focused`, `verdict`)
+- `EDGE_SESSION_TICK` (10Hz) — real dragged-window geometry, cursor position, camera pending
+- `EDGE_CONFIRMED` / `EDGE_DISARM reason=…` — click-vs-drag threshold crossing and session teardown
+- `CMD PAN_START` / `CMD EDGE_START` — every IPC command with its verdict; overlapping keybind modifiers show up here immediately
+
 ## Requirements
 
 - Hyprland 0.55+ (Lua config with `hl.*` API)
