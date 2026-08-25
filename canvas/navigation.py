@@ -50,7 +50,7 @@ class Navigator:
 
     def navigate(self, direction: str) -> None:
         """Navigate to the next/prev floating window, panning the canvas to center it."""
-        current_time = time.time()
+        current_time = time.monotonic()
         if current_time - self._last_nav_time < self._cooldown:
             return
         self._last_nav_time = current_time

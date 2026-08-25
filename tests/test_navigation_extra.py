@@ -1,7 +1,7 @@
 """Additional tests for canvas.navigation — covering IPC-dependent methods."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from canvas.navigation import Navigator, _safe_int
 
@@ -225,3 +225,58 @@ def test_pan_to_window_scopes_lua_to_workspace():
     nav._pan_to_window(windows, "0x1", 960, 540, workspace_id=7)
     lua = ipc.eval_lua.call_args[0][0]
     assert lua.count("workspace = 7") == 2  # move loop + focus loop
+
+
+def test_navigate_cooldown_uses_monotonic_clock():
+    """Cooldown must be monotonic-based so wall-clock jumps cannot break it."""
+    import canvas.navigation as nav_mod
+
+    windows = [
+        _make_window("a", "0x1", 0, 0, 100, 100),
+        _make_window("b", "0x2", 500, 0, 100, 100),
+    ]
+    ipc = MagicMock()
+
+    def fake_send(cmd):
+        if "activeworkspace" in cmd:
+            return json.dumps({"id": 1})
+        if "clients" in cmd:
+            return json.dumps(windows)
+        if "activewindow" in cmd:
+            return json.dumps({"class": "a", "address": "0x1"})
+        return json.dumps([{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}])
+
+    ipc.send.side_effect = fake_send
+    nav = Navigator(ipc=ipc, protected_apps=[], cooldown=10.0)
+
+    with patch.object(nav_mod.time, "monotonic", side_effect=[1000.0, 1000.05]):
+        nav.navigate("right")  # stamps t=1000.0
+        nav.navigate("right")  # dt=0.05 < cooldown → blocked
+
+    assert ipc.eval_lua.call_count == 1
+
+
+def test_navigate_passes_workspace_to_pan():
+    """navigate() must scope the pan Lua to the active workspace."""
+    windows = [
+        _make_window("a", "0x1", 0, 0, 100, 100, workspace_id=9),
+        _make_window("b", "0x2", 500, 0, 100, 100, workspace_id=9),
+    ]
+    ipc = MagicMock()
+
+    def fake_send(cmd):
+        if "activeworkspace" in cmd:
+            return json.dumps({"id": 9})
+        if "clients" in cmd:
+            return json.dumps(windows)
+        if "activewindow" in cmd:
+            return json.dumps({"class": "a", "address": "0x1"})
+        return json.dumps([{"focused": True, "x": 0, "y": 0, "width": 1920, "height": 1080}])
+
+    ipc.send.side_effect = fake_send
+    nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+
+    nav.navigate("right")
+
+    assert ipc.eval_lua.call_count == 1
+    assert "workspace = 9" in ipc.eval_lua.call_args[0][0]

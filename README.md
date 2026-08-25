@@ -116,12 +116,12 @@ canvas-ctl edge-stop        # stop edge-scroll (called by mouse release bind)
 
 ## Configuration
 
-Default config is bundled at `config.yml`. Override in `~/.config/canvas/config.yml`:
+All defaults are built into the daemon (`DEFAULT_CONFIG` in `canvas/config.py`) — it runs fine with no config file. The repo's `config.yml` is a ready-to-copy template; installed wheels/pipx/uv-tool packages do not include it. To customize, create `~/.config/canvas/config.yml`:
 
 ```yaml
 speed: 1.6                    # pan speed multiplier
 invert:
-  enabled: false              # start with inverted pan direction
+  enabled: true               # true = grab canvas (intuitive), false = follow cursor
 edge_scroll:
   enabled: true               # auto-pan when dragging window past screen edge
   ramp_distance: 50            # px of overflow to reach full speed
@@ -134,6 +134,8 @@ navigation:
     - chromium
     - firefox
 ```
+
+Invalid values (wrong type, zero/negative numbers) are rejected at daemon startup with the exact offending keys listed on stderr.
 
 ## Architecture
 
