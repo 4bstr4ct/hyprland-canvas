@@ -160,8 +160,12 @@ class EdgeScrollState:
     Guards, in order:
     - address mismatch → drag lost → auto-stop
     - window displacement below grab_dead_zone → click, not a drag → no scroll
-    - confirmed drags get proportional camera assist while any window edge
-      is within ramp_distance of the monitor boundary (full speed past it).
+    - cursor outside the dragged window's rect → grab gone → auto-stop
+
+    Camera assist is DIRECTION-AWARE: each monitor edge contributes only
+    while the window moves toward it (or is held against it). Pulling the
+    window away from an edge stops that side's assist immediately, so a
+    window parked near a boundary never drags the camera behind your back.
     """
 
     _IDLE_TIMEOUT = 0.5
@@ -190,6 +194,8 @@ class EdgeScrollState:
         self._monitor_h = 1080
         self._grab_x = 0
         self._grab_y = 0
+        self._prev_x: int | None = None
+        self._prev_y: int | None = None
         self._confirmed_drag = False
         self._last_move_time: float = 0.0
         self._pending_dx = 0.0
@@ -245,6 +251,8 @@ class EdgeScrollState:
             self._session += 1
             self._grab_x = params.win_x
             self._grab_y = params.win_y
+            self._prev_x = params.win_x
+            self._prev_y = params.win_y
             self._confirmed_drag = False
             self._last_geo = None
             self._pending_dx = 0.0
@@ -258,6 +266,8 @@ class EdgeScrollState:
             self._active = False
             self._dragged_addr = ""
             self._confirmed_drag = False
+            self._prev_x = None
+            self._prev_y = None
             self._pending_dx = 0.0
             self._pending_dy = 0.0
             return "EDGE_OFF"
@@ -283,6 +293,8 @@ class EdgeScrollState:
                 self._active = False
                 self._dragged_addr = ""
                 self._confirmed_drag = False
+                self._prev_x = None
+                self._prev_y = None
                 self._pending_dx = 0.0
                 self._pending_dy = 0.0
                 return
@@ -305,6 +317,8 @@ class EdgeScrollState:
                 self._active = False
                 self._dragged_addr = ""
                 self._confirmed_drag = False
+                self._prev_x = None
+                self._prev_y = None
                 self._pending_dx = 0.0
                 self._pending_dy = 0.0
                 return
@@ -329,6 +343,11 @@ class EdgeScrollState:
             mw, mh = self._monitor_w, self._monitor_h
             rd = self.ramp_distance
 
+            # Window velocity since the previous tick: an edge only assists
+            # while the window moves TOWARD it (or is held against it).
+            win_dx = 0 if self._prev_x is None else x - self._prev_x
+            win_dy = 0 if self._prev_y is None else y - self._prev_y
+
             dist_left = x - mx
             dist_right = (mx + mw) - (x + w)
             dist_top = y - my
@@ -336,21 +355,24 @@ class EdgeScrollState:
 
             before_x, before_y = self._pending_dx, self._pending_dy
 
-            if dist_left < rd:
+            if dist_left < rd and win_dx <= 0:
                 progress = min((rd - dist_left) / rd, 1.0)
                 self._pending_dx -= self.speed * progress
 
-            if dist_right < rd:
+            if dist_right < rd and win_dx >= 0:
                 progress = min((rd - dist_right) / rd, 1.0)
                 self._pending_dx += self.speed * progress
 
-            if dist_top < rd:
+            if dist_top < rd and win_dy <= 0:
                 progress = min((rd - dist_top) / rd, 1.0)
                 self._pending_dy -= self.speed * progress
 
-            if dist_bottom < rd:
+            if dist_bottom < rd and win_dy >= 0:
                 progress = min((rd - dist_bottom) / rd, 1.0)
                 self._pending_dy += self.speed * progress
+
+            self._prev_x = x
+            self._prev_y = y
 
             if self._pending_dx != before_x or self._pending_dy != before_y:
                 self._last_move_time = time.monotonic()
@@ -381,6 +403,8 @@ class EdgeScrollState:
                 self._active = False
                 self._dragged_addr = ""
                 self._confirmed_drag = False
+                self._prev_x = None
+                self._prev_y = None
                 self._pending_dx = 0.0
                 self._pending_dy = 0.0
                 return True

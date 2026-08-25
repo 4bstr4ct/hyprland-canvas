@@ -392,3 +392,93 @@ def test_cursor_far_outside_before_confirmation_disarms():
 
     es.update_geometry("0xabc", 600, 300, 500, 300, 50, 50)
     assert es.active is False
+
+
+# --- direction gating ---
+
+
+def test_pull_away_from_edge_stops_assist():
+    """Regression: a window parked at the right edge, dragged LEFT (inward),
+    must not push the camera right."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    _start_edge(es, 1450, 390)  # right edge exactly at boundary
+
+    # drag inward: dx negative → right edge must not assist
+    es.update_geometry(
+        "0xabc",
+        1400,
+        390,
+        500,
+        300,
+        1650,
+        540,
+    )
+    dx, dy = es.consume_delta()
+    assert (dx, dy) == (0, 0)
+
+    es.update_geometry("0xabc", 1300, 390, 500, 300, 1550, 540)  # still moving left
+    assert es.consume_delta() == (0, 0)
+
+
+def test_hold_at_edge_continues_assist():
+    """Holding the window against the edge (no movement) keeps panning."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    _start_edge(es, 900, 390)
+    es.update_geometry("0xabc", 950, 390, 500, 300, 1200, 540)  # confirm
+
+    es.update_geometry("0xabc", 1700, 390, 500, 300, 1950, 540)  # push past edge
+    first = es.consume_delta()
+    assert first[0] != 0
+
+    # hold: identical geometry → win_dx == 0 → assist continues
+    second = None
+    for _ in range(3):
+        es.update_geometry("0xabc", 1700, 390, 500, 300, 1950, 540)
+        d = es.consume_delta()
+        assert d[0] != 0
+        second = d
+
+    assert first == second  # full speed sustained while held
+
+
+def test_drag_toward_edge_then_back_stops():
+    """Toward edge → assist; reverse mid-drag → assist stops that side."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    _start_edge(es, 900, 390)
+    es.update_geometry("0xabc", 950, 390, 500, 300, 1200, 540)
+
+    es.update_geometry("0xabc", 1500, 390, 500, 300, 1750, 540)  # toward right
+    assert es.consume_delta()[0] != 0
+
+    es.update_geometry("0xabc", 1480, 390, 500, 300, 1730, 540)  # reversed
+    assert es.consume_delta() == (0, 0)
+
+
+def test_vertical_direction_gating():
+    """Bottom-edge assist only while dy >= 0; pulling up stops it."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    _start_edge(es, 710, 400)
+    es.update_geometry("0xabc", 760, 450, 500, 300, 1010, 600)  # confirm
+
+    es.update_geometry("0xabc", 760, 840, 500, 300, 1010, 990)  # down toward bottom
+    _, dy_down = es.consume_delta()
+    assert dy_down < 0
+
+    es.update_geometry("0xabc", 760, 800, 500, 300, 1010, 950)  # pulled up
+    assert es.consume_delta() == (0, 0)
+
+
+def test_first_tick_after_start_treated_as_stationary():
+    """First update with unchanged position (dx=dy=0) may still assist —
+    matches grab-time snapshot semantics."""
+    es = EdgeScrollState(ramp_distance=50, speed=20.0, grab_dead_zone=5)
+    es.set_monitor_rect(0, 0, 1920, 1080)
+    # window ALREADY past the right edge at grab time; confirm by moving cursor
+    # is impossible without window motion, so this only assists after real motion
+    _start_edge(es, 1800, 390)  # right edge 380px past monitor
+    es.update_geometry("0xabc", 1800, 390, 500, 300, 2050, 540)  # not confirmed yet
+    assert es.consume_delta() == (0, 0)
