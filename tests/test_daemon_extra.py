@@ -94,3 +94,62 @@ def test_fetch_monitor_rect_empty_list():
     ipc.send.return_value = "[]"
     ds = _make_daemon_state(ipc)
     ds._fetch_monitor_rect()  # should not raise, defaults stay
+
+
+# --- idle pan stop drops baselines ---
+
+
+def test_idle_pan_stop_clears_baselines():
+    """Idle timeout must drop baselines so shutdown cannot restore stale positions."""
+    import time as time_mod
+
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+    ds.panning._last_move_time = time_mod.monotonic() - 1.0
+
+    assert ds.handle_idle_pan_stop() is True
+    assert ds.panning.pan_active is False
+    assert ds.baselines == {}
+
+
+def test_idle_pan_stop_noop_while_active():
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+
+    assert ds.handle_idle_pan_stop() is False
+    assert ds.panning.pan_active is True
+    assert ds.baselines == {"0x1": (10, 20)}
+
+
+def test_restore_skipped_after_idle_stop():
+    """Full chain: idle stop → shutdown restore is a no-op (no window movement)."""
+    import time as time_mod
+
+    ipc = MagicMock()
+    ds = _make_daemon_state(ipc)
+    ds.panning.start_pan()
+    ds.baselines = {"0xabc": (100, 200)}
+    ds.panning._last_move_time = time_mod.monotonic() - 1.0
+
+    ds.handle_idle_pan_stop()
+    ds.restore_baselines()
+
+    ipc.eval_lua.assert_not_called()
+
+
+def test_shutdown_restores_only_when_pan_still_active():
+    """SIGTERM during active pan → windows restored; after PAN_STOP → untouched."""
+    ipc = MagicMock()
+    ds = _make_daemon_state(ipc)
+    ds.panning.start_pan()
+    ds.baselines = {"0xabc": (100, 200)}
+
+    ds.restore_baselines()  # pan active: baseline restore intended
+    ipc.eval_lua.assert_called_once()
+
+    ipc.reset_mock()
+    ds.handle_ipc("PAN_STOP")
+    ds.restore_baselines()
+    ipc.eval_lua.assert_not_called()

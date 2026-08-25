@@ -158,6 +158,19 @@ class DaemonState:
         pan = "PANNING" if self.panning.is_dragging else "IDLE"
         return f"{inv} {pan}"
 
+    def handle_idle_pan_stop(self) -> bool:
+        """Auto-stop panning after cursor idle; drop baselines.
+
+        Baselines must die together with the pan: keeping them after an
+        idle timeout would make a later shutdown restore windows to
+        long-stale pre-pan positions, silently destroying layout changes
+        the user made in between.
+        """
+        stopped = self.panning.check_idle_timeout()
+        if stopped:
+            self.baselines = {}
+        return stopped
+
     def fetch_baselines(self) -> None:
         """Fetch current positions of all floating windows as baseline."""
         try:
@@ -308,10 +321,11 @@ def run() -> None:
     target_interval = 1.0 / 60.0
     prev_time = time.monotonic()
 
+    poller_died = False
     try:
         prev_total = (0, 0)
         while not stop_event.is_set():
-            state.check_idle_timeout()
+            daemon_state.handle_idle_pan_stop()
 
             if not state.pan_active:
                 prev_total = (0, 0)
@@ -330,6 +344,11 @@ def run() -> None:
                 if es_dx != 0 or es_dy != 0:
                     daemon_state.edge_scroll_move(es_dx, es_dy)
 
+            if not state.poller_alive:
+                poller_died = True
+                log.error("cursor poller died — cannot track cursor position")
+                break
+
             now = time.monotonic()
             elapsed = now - prev_time
             time.sleep(max(0, target_interval - elapsed))
@@ -337,12 +356,15 @@ def run() -> None:
 
     except KeyboardInterrupt as exc:
         log.info("shutting down: %s", exc)
+    finally:
+        stop_event.set()
+        daemon_state.restore_baselines()
+        ipc_server.stop()
+        cursor_thread.join(timeout=1)
+        ipc_thread.join(timeout=1)
 
-    if not state.poller_alive:
-        log.error("cursor poller died — cannot track cursor position")
-
-    stop_event.set()
-    daemon_state.restore_baselines()
-    ipc_server.stop()
-    cursor_thread.join(timeout=1)
-    ipc_thread.join(timeout=1)
+    if poller_died:
+        # Exit non-zero so a supervisor (e.g. systemd Restart=on-failure)
+        # restarts the daemon instead of leaving a zombie that answers
+        # ping but can never pan again.
+        raise SystemExit(1)
