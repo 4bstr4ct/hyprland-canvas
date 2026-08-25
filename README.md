@@ -152,6 +152,7 @@ Key design decisions:
 - **Cursor polling** — reads cursor position from Hyprland IPC, works on any Wayland setup
 - **`hl.dsp.window.move({window=w})` without focus** — passing a window object bypasses auto-focus, so no cursor warp or feedback loop
 - **Direct socket IPC** — one persistent socket connection instead of spawning a subprocess every frame
+- **Workspace-scoped** — pan, edge-scroll and navigation only move floating windows on the current workspace; other workspaces are never touched
 - **Idle timeout** (500ms) — auto-stops panning if Hyprland drops a mouse release event during active drag
 
 ## Requirements

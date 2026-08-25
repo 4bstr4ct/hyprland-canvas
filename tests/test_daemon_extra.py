@@ -54,15 +54,6 @@ def test_handle_ipc_edge_start_no_cursor():
     assert result == "EDGE_NO_CURSOR"
 
 
-def test_move_windows_to_delta_no_baselines():
-    ipc = MagicMock()
-    ds = _make_daemon_state(ipc)
-    ds.move_windows_to_delta(10, 20)
-    ipc.eval_lua.assert_called_once()
-    lua = ipc.eval_lua.call_args[0][0]
-    assert "bd = {\n}" in lua
-
-
 def test_edge_scroll_move_ipc_error():
     ipc = MagicMock()
     ipc.eval_lua.side_effect = ConnectionError("fail")
@@ -78,12 +69,24 @@ def test_edge_scroll_move_ipc_error():
             cursor_y=350,
         )
     )
+    ds.edge_scroll_workspace = 1
     ds.edge_scroll_move(10, -5)  # should not raise
+
+
+def test_move_windows_to_delta_no_baselines():
+    """Without baselines (or workspace) the move must be a no-op."""
+    ipc = MagicMock()
+    ds = _make_daemon_state(ipc)
+    ds.move_windows_to_delta(10, 20)
+    ipc.eval_lua.assert_not_called()
 
 
 def test_fetch_baselines_window_with_short_at():
     ipc = MagicMock()
-    ipc.send.return_value = '[{"address":"0xabc","floating":true,"at":[10]}]'
+    ipc.send.side_effect = [
+        '{"id":1}',
+        '[{"address":"0xabc","floating":true,"at":[10]}]',
+    ]
     ds = _make_daemon_state(ipc)
     ds.fetch_baselines()
     assert ds.baselines == {}
@@ -145,6 +148,7 @@ def test_shutdown_restores_only_when_pan_still_active():
     ds = _make_daemon_state(ipc)
     ds.panning.start_pan()
     ds.baselines = {"0xabc": (100, 200)}
+    ds.baseline_workspace = 1
 
     ds.restore_baselines()  # pan active: baseline restore intended
     ipc.eval_lua.assert_called_once()

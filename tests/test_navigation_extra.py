@@ -216,3 +216,12 @@ def test_navigate_focused_not_in_list():
     ]
     nav = _make_nav(ipc)
     nav.navigate("right")  # should not raise
+
+
+def test_pan_to_window_scopes_lua_to_workspace():
+    ipc = MagicMock()
+    nav = _make_nav(ipc)
+    windows = [_make_window("kitty", "0x1", 100, 200, 400, 300)]
+    nav._pan_to_window(windows, "0x1", 960, 540, workspace_id=7)
+    lua = ipc.eval_lua.call_args[0][0]
+    assert lua.count("workspace = 7") == 2  # move loop + focus loop

@@ -43,6 +43,11 @@ class DaemonState:
         self.navigator = navigator
         self.ipc = ipc
         self.baselines: dict[str, tuple[int, int]] = {}
+        # Workspace whose windows the baselines belong to; pan and
+        # edge-scroll moves are scoped to it so other workspaces'
+        # floating layouts stay untouched.
+        self.baseline_workspace: int | None = None
+        self.edge_scroll_workspace: int | None = None
 
     def _fetch_focused_window(self) -> dict[str, Any]:
         """Get focused window info: address, position, size."""
@@ -77,6 +82,16 @@ class DaemonState:
                 )
         except Exception as e:
             log.debug("fetch monitor rect failed: %s", e)
+
+    def _get_active_workspace_id(self) -> int | None:
+        """Active workspace id, or None when the query fails."""
+        try:
+            resp = self.ipc.send("j/activeworkspace")
+            ws: dict[str, Any] = json.loads(resp)
+            return int(ws["id"])
+        except Exception as e:
+            log.debug("get active workspace failed: %s", e)
+            return None
 
     _IPC_DISPATCH: dict[str, str] = {
         "PAN_START": "_handle_pan_start",
@@ -127,6 +142,10 @@ class DaemonState:
             cx, cy = get_cursor_pos()
         except Exception:
             return "EDGE_NO_CURSOR"
+        ws_id = self._get_active_workspace_id()
+        if ws_id is None:
+            return "EDGE_NO_WORKSPACE"
+        self.edge_scroll_workspace = ws_id
         self._fetch_monitor_rect()
         return self.edge_scroll.start(
             EdgeScrollParams(
@@ -172,31 +191,42 @@ class DaemonState:
         return stopped
 
     def fetch_baselines(self) -> None:
-        """Fetch current positions of all floating windows as baseline."""
+        """Snapshot floating windows of the ACTIVE workspace as pan baselines."""
         try:
+            ws_resp = self.ipc.send("j/activeworkspace")
+            ws: dict[str, Any] = json.loads(ws_resp)
+            workspace_id = int(ws["id"])
+
             resp = self.ipc.send("j/clients")
             clients = json.loads(resp)
             baselines: dict[str, tuple[int, int]] = {}
             for w in clients:
-                if w.get("floating"):
-                    addr = w.get("address", "")
-                    at = w.get("at", [0, 0])
-                    if addr and len(at) >= 2:
-                        baselines[addr] = (at[0], at[1])
+                if not w.get("floating"):
+                    continue
+                wsw = w.get("workspace")
+                if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:
+                    continue
+                addr = w.get("address", "")
+                at = w.get("at", [0, 0])
+                if addr and len(at) >= 2:
+                    baselines[addr] = (at[0], at[1])
             self.baselines = baselines
+            self.baseline_workspace = workspace_id
         except Exception as e:
             log.warning("fetch baselines failed: %s", e)
             self.baselines = {}
+            self.baseline_workspace = None
 
     def restore_baselines(self) -> None:
-        """Move all floating windows back to their pre-pan positions.
+        """Move the snapshot's windows back to their pre-pan positions.
 
         Called on graceful shutdown so windows don't stay displaced.
         """
-        if not self.baselines:
+        if not self.baselines or self.baseline_workspace is None:
             return
         try:
-            lines = ["local ws = hl.get_windows({ floating = true })"]
+            ws_id = int(self.baseline_workspace)
+            lines = [f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})"]
             lines.append("local bd = {")
             for addr, (bx, by) in self.baselines.items():
                 safe_addr = _lua_escape(addr)
@@ -218,9 +248,16 @@ class DaemonState:
             log.warning("restore baselines failed: %s", e)
 
     def move_windows_to_delta(self, total_dx: int, total_dy: int) -> None:
-        """Move all floating windows to baseline + total_delta (absolute positioning)."""
+        """Move the workspace's floating windows to baseline + total_delta.
+
+        Absolute positioning against the snapshot; scoped to the workspace
+        captured at PAN_START.
+        """
+        if not self.baselines or self.baseline_workspace is None:
+            return
         try:
-            lines = ["local ws = hl.get_windows({ floating = true })"]
+            ws_id = int(self.baseline_workspace)
+            lines = [f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})"]
             lines.append("local bd = {")
             for addr, (bx, by) in self.baselines.items():
                 safe_addr = _lua_escape(addr)
@@ -246,14 +283,19 @@ class DaemonState:
 
         Camera follows the dragged window: other windows move opposite.
         Cursor at right edge → camera right → other windows move left.
+        Scoped to the workspace active at EDGE_START.
         """
         if dx == 0 and dy == 0:
             return
+        if self.edge_scroll_workspace is None:
+            log.warning("edge-scroll move skipped: no workspace captured")
+            return
+        ws_id = int(self.edge_scroll_workspace)
         dragged = self.edge_scroll.dragged_addr
         try:
             safe_addr = _lua_escape(dragged)
             lua = (
-                f"local ws = hl.get_windows({{ floating = true }})\n"
+                f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})\n"
                 f"for _, w in ipairs(ws) do\n"
                 f'  if tostring(w.address) ~= "{safe_addr}" then\n'
                 f"    hl.dispatch(hl.dsp.window.move({{"

@@ -96,7 +96,9 @@ class Navigator:
         center_x, center_y = self._get_monitor_center()
         # Re-fetch floating windows (positions may have changed)
         floating_updated = self._get_floating_windows(workspace_id)
-        self._pan_to_window(floating_updated, floating[new_index]["address"], center_x, center_y)
+        self._pan_to_window(
+            floating_updated, floating[new_index]["address"], center_x, center_y, workspace_id
+        )
 
     def _persist_canvas_state(self) -> None:
         toggle_state.save({ws: sorted(a) for ws, a in self._canvas_mode_workspaces.items()})
@@ -192,8 +194,9 @@ class Navigator:
         target_addr: Any,
         center_x: int,
         center_y: int,
+        workspace_id: int | None = None,
     ) -> None:
-        """Pan all floating windows so target window centers on monitor via Lua API."""
+        """Pan the workspace's floating windows so the target centers on monitor."""
         target = None
         for w in floating_windows:
             if w["address"] == target_addr:
@@ -212,8 +215,12 @@ class Navigator:
         safe_dx = _safe_int(dx, "dx")
         safe_dy = _safe_int(dy, "dy")
 
+        ws_filter = ""
+        if workspace_id is not None:
+            ws_filter = f", workspace = {_safe_int(workspace_id, 'workspace_id')}"
+
         lua = (
-            f"local ws = hl.get_windows({{ floating = true }})\n"
+            f"local ws = hl.get_windows({{ floating = true{ws_filter} }})\n"
             f"for _, w in ipairs(ws) do\n"
             f"  hl.dispatch(hl.dsp.window.move({{"
             f" x = {safe_dx}, y = {safe_dy},"
@@ -227,7 +234,7 @@ class Navigator:
             addr = target.get("address", "")
             if _VALID_ADDR.match(addr):
                 lua += (
-                    f"local _t = hl.get_windows({{ floating = true }})\n"
+                    f"local _t = hl.get_windows({{ floating = true{ws_filter} }})\n"
                     f"for _, w in ipairs(_t) do\n"
                     f'  if tostring(w.address) == "{addr}" then\n'
                     f"    hl.dispatch(hl.dsp.focus({{ window = w }}))\n"
