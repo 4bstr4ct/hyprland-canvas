@@ -166,3 +166,52 @@ def test_from_env_uses_hyprland_socket():
         ipc = HyprIPC.from_env()
 
     assert "test_sig" in ipc._socket_path
+
+
+def test_get_active_window_geometry_parses():
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [
+        b'{"address":"0xabc","at":[10,20],"size":[500,300]}',
+        b"",
+    ]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    geo = ipc.get_active_window_geometry()
+
+    assert geo == ("0xabc", 10, 20, 500, 300)
+
+
+def test_get_active_window_geometry_none_without_address():
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [b'{"at":[10,20],"size":[500,300]}', b""]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    assert ipc.get_active_window_geometry() is None
+
+
+def test_get_active_window_geometry_none_on_malformed_fields():
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [
+        b'{"address":"0xabc","at":[10],"size":[500,300]}',
+        b"",
+    ]
+    ipc = _make_ipc_with_mock(mock_sock)
+
+    assert ipc.get_active_window_geometry() is None
+
+
+def test_module_level_get_active_window_geometry_delegates():
+    mock_sock = MagicMock()
+    mock_sock.recv.side_effect = [
+        b'{"address":"0x9","at":[0,0],"size":[1,2]}',
+        b"",
+    ]
+
+    from canvas.hypr import get_active_window_geometry
+
+    with patch("canvas.hypr._get_default") as mock_get:
+        ipc = _make_ipc_with_mock(mock_sock)
+        mock_get.return_value = ipc
+        geo = get_active_window_geometry()
+
+    assert geo == ("0x9", 0, 0, 1, 2)

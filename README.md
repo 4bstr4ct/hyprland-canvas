@@ -18,7 +18,7 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Feature | Keybind | Description |
 |---------|---------|-------------|
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
-| Edge-scroll | SUPER+LMB | Drag a floating window past screen edge — camera follows (activates only when the drag starts on a floating window under the cursor) |
+| Edge-scroll | SUPER+LMB | Drag a floating window toward the screen edge — camera follows (engages only for a confirmed drag of the window under the cursor) |
 | Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
@@ -126,6 +126,7 @@ edge_scroll:
   enabled: true               # auto-pan when dragging window past screen edge
   ramp_distance: 50            # px of overflow to reach full speed
   speed: 20.0                  # max px/frame at full overflow (~1200 px/s at 60fps)
+  grab_dead_zone: 5            # px the window must actually move before camera may engage
   # max_speed: 30             # optional: cap per-frame edge-scroll delta (pixels)
 navigation:
   cooldown: 0.2               # seconds between nav commands
@@ -155,6 +156,7 @@ Key design decisions:
 - **`hl.dsp.window.move({window=w})` without focus** — passing a window object bypasses auto-focus, so no cursor warp or feedback loop
 - **Direct socket IPC** — a fresh Unix-socket connection per command (~0.1ms locally) instead of spawning a subprocess every frame
 - **Workspace-scoped** — pan, edge-scroll and navigation only move floating windows on the current workspace; other workspaces are never touched
+- **Ground-truth edge pan** — modeled after compositor-level implementations (driftwm, hevel): the camera assists only while a *confirmed* drag (window under cursor + focus match + moved past `grab_dead_zone`) pushes the window into the edge zone. The dragged window's real geometry is polled from Hyprland every frame — no cursor-derived guessing, so clicks on borders/gaps or holds without movement never move the camera
 - **Idle timeout** (500ms) — auto-stops panning if Hyprland drops a mouse release event during active drag
 
 ## Requirements

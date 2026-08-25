@@ -199,3 +199,18 @@ def test_toggle_state_load_corrupt_file(tmp_path):
         assert ts_load(path=str(file)) == {}
     finally:
         logging.disable(logging.NOTSET)
+
+
+def test_validate_rejects_bad_grab_dead_zone():
+    problems = validate(
+        {
+            "speed": 1.0,
+            "edge_scroll": {
+                "ramp_distance": 50,
+                "speed": 20.0,
+                "enabled": True,
+                "grab_dead_zone": 0,
+            },
+        }
+    )
+    assert any("grab_dead_zone" in p for p in problems)

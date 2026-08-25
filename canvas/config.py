@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ramp_distance": 50,
         "speed": 20.0,
         "max_speed": None,
+        "grab_dead_zone": 5,
     },
 }
 
@@ -105,6 +106,9 @@ def validate(cfg: dict[str, Any]) -> list[str]:
             errors.append(f"edge_scroll.max_speed must be a number > 0 or null, got {es_max!r}")
         if not isinstance(es.get("enabled"), bool):
             errors.append(f"edge_scroll.enabled must be a boolean, got {es.get('enabled')!r}")
+        gdz = es.get("grab_dead_zone")
+        if not isinstance(gdz, int) or isinstance(gdz, bool) or gdz <= 0:
+            errors.append(f"edge_scroll.grab_dead_zone must be an integer > 0, got {gdz!r}")
 
     return errors
 

@@ -5,11 +5,10 @@ Architecture:
 - When pan_active, accumulate total delta from cursor movement
 - Daemon uses absolute positioning (baseline + total_delta) to avoid drift
 - PAN_START/PAN_STOP controlled by Hyprland keybinds
-- Edge-scroll: when a dragged window's edge goes PAST the monitor edge,
-  camera follows by moving all OTHER floating windows opposite.
-  Only triggers on OVERFLOW — how much further the window went beyond
-  its initial position relative to the edge. This prevents accidental
-  scroll when grabbing a window that was already partially off-screen.
+- Edge-scroll: while a CONFIRMED window drag is in progress, the daemon
+  polls the dragged window's real geometry and the camera assists as the
+  window enters the monitor edge zone. No cursor-derived guessing: if the
+  window does not actually move, nothing scrolls.
 """
 
 import logging
@@ -148,18 +147,20 @@ class PanningState:
 
 
 class EdgeScrollState:
-    """Thread-safe edge-scroll state with overflow-based activation.
+    """Thread-safe edge-scroll driven by REAL window geometry.
 
-    Scroll triggers only when a window edge goes PAST the monitor edge
-    AND has moved further out than it was at drag start (overflow > 0).
+    The daemon polls the dragged window's actual position from Hyprland
+    (j/activewindow — during an interactive drag the dragged window is
+    focused) and feeds it via update_geometry(). Nothing is derived from
+    cursor math: if the window does not really move, the camera never
+    moves. This mirrors compositor-level implementations (driftwm, hevel)
+    where edge pan engages only inside a confirmed move grab.
 
-    This prevents accidental scrolling when:
-    - Grabbing a window that was already partially off-screen
-    - The window is merely near the edge but hasn't crossed it
-    - Dragging a window back toward the screen from off-screen
-
-    Speed ramps linearly: progress = min(overflow / ramp_distance, 1.0).
-    Direction: overflow on right → camera right → other windows move left.
+    Guards, in order:
+    - address mismatch → drag lost → auto-stop
+    - window displacement below grab_dead_zone → click, not a drag → no scroll
+    - confirmed drags get proportional camera assist while any window edge
+      is within ramp_distance of the monitor boundary (full speed past it).
     """
 
     _IDLE_TIMEOUT = 0.5
@@ -170,25 +171,22 @@ class EdgeScrollState:
         speed: float = 20.0,
         max_speed: float | None = None,
         enabled: bool = True,
+        grab_dead_zone: int = 5,
     ) -> None:
         self.ramp_distance = ramp_distance
         self.speed = speed
         self.max_speed = max_speed
         self.enabled = enabled
+        self.grab_dead_zone = grab_dead_zone
         self._active = False
         self._dragged_addr: str = ""
         self._monitor_x = 0
         self._monitor_y = 0
         self._monitor_w = 1920
         self._monitor_h = 1080
-        self._win_w = 0
-        self._win_h = 0
-        self._offset_x = 0
-        self._offset_y = 0
-        self._initial_dist_left = 0
-        self._initial_dist_right = 0
-        self._initial_dist_top = 0
-        self._initial_dist_bottom = 0
+        self._grab_x = 0
+        self._grab_y = 0
+        self._confirmed_drag = False
         self._last_move_time: float = 0.0
         self._pending_dx = 0.0
         self._pending_dy = 0.0
@@ -204,6 +202,11 @@ class EdgeScrollState:
         with self._lock:
             return self._dragged_addr
 
+    @property
+    def confirmed_drag(self) -> bool:
+        with self._lock:
+            return self._confirmed_drag
+
     def set_monitor_rect(self, x: int, y: int, w: int, h: int) -> None:
         with self._lock:
             self._monitor_x = x
@@ -212,27 +215,15 @@ class EdgeScrollState:
             self._monitor_h = h
 
     def start(self, params: EdgeScrollParams) -> str:
-        """Activate edge-scroll, storing window geometry, cursor offset, and initial distances."""
+        """Activate edge-scroll, remembering the grab-time window position."""
         with self._lock:
             if not self.enabled:
                 return "EDGE_DISABLED"
             self._active = True
             self._dragged_addr = params.dragged_addr
-            self._win_w = params.win_w
-            self._win_h = params.win_h
-            self._offset_x = params.cursor_x - params.win_x
-            self._offset_y = params.cursor_y - params.win_y
-
-            mx = self._monitor_x
-            my = self._monitor_y
-            mw = self._monitor_w
-            mh = self._monitor_h
-
-            self._initial_dist_left = params.win_x - mx
-            self._initial_dist_right = (mx + mw) - (params.win_x + params.win_w)
-            self._initial_dist_top = params.win_y - my
-            self._initial_dist_bottom = (my + mh) - (params.win_y + params.win_h)
-
+            self._grab_x = params.win_x
+            self._grab_y = params.win_y
+            self._confirmed_drag = False
             self._pending_dx = 0.0
             self._pending_dy = 0.0
             self._last_move_time = time.monotonic()
@@ -243,72 +234,68 @@ class EdgeScrollState:
         with self._lock:
             self._active = False
             self._dragged_addr = ""
+            self._confirmed_drag = False
             self._pending_dx = 0.0
             self._pending_dy = 0.0
             return "EDGE_OFF"
 
-    def update_cursor(self, cursor_x: int, cursor_y: int) -> None:
-        """Feed cursor position from cursor_poller.
-
-        Derives window position, checks overflow past monitor edges.
-        Only scrolls when window edge is past monitor AND overflow > 0.
-        """
+    def update_geometry(self, addr: str, x: int, y: int, w: int, h: int) -> None:
+        """Feed the dragged window's real geometry polled from Hyprland."""
         with self._lock:
             if not self._active or not self.enabled:
                 return
 
-            win_x = cursor_x - self._offset_x
-            win_y = cursor_y - self._offset_y
-            win_right = win_x + self._win_w
-            win_bottom = win_y + self._win_h
+            if addr != self._dragged_addr:
+                # Focus left the grabbed window mid-press: no real drag.
+                log.debug("edge-scroll lost dragged window %s (now %s)", self._dragged_addr, addr)
+                self._active = False
+                self._dragged_addr = ""
+                self._confirmed_drag = False
+                self._pending_dx = 0.0
+                self._pending_dy = 0.0
+                return
 
-            mx = self._monitor_x
-            my = self._monitor_y
-            mw = self._monitor_w
-            mh = self._monitor_h
+            # Click-vs-drag threshold (driftwm uses 5px): until the window
+            # itself moved beyond it, this is still just a press.
+            if not self._confirmed_drag:
+                if max(abs(x - self._grab_x), abs(y - self._grab_y)) < self.grab_dead_zone:
+                    return
+                self._confirmed_drag = True
+
+            mx, my = self._monitor_x, self._monitor_y
+            mw, mh = self._monitor_w, self._monitor_h
             rd = self.ramp_distance
 
-            cur_dist_left = win_x - mx
-            cur_dist_right = (mx + mw) - win_right
-            cur_dist_top = win_y - my
-            cur_dist_bottom = (my + mh) - win_bottom
+            dist_left = x - mx
+            dist_right = (mx + mw) - (x + w)
+            dist_top = y - my
+            dist_bottom = (my + mh) - (y + h)
 
-            # Left edge: window goes past monitor left
-            if cur_dist_left < 0:
-                overflow = self._initial_dist_left - cur_dist_left
-                if overflow > 0:
-                    progress = min(overflow / rd, 1.0)
-                    self._pending_dx -= self.speed * progress
+            before_x, before_y = self._pending_dx, self._pending_dy
 
-            # Right edge: window goes past monitor right
-            elif cur_dist_right < 0:
-                overflow = self._initial_dist_right - cur_dist_right
-                if overflow > 0:
-                    progress = min(overflow / rd, 1.0)
-                    self._pending_dx += self.speed * progress
+            if dist_left < rd:
+                progress = min((rd - dist_left) / rd, 1.0)
+                self._pending_dx -= self.speed * progress
 
-            # Top edge: window goes past monitor top
-            if cur_dist_top < 0:
-                overflow = self._initial_dist_top - cur_dist_top
-                if overflow > 0:
-                    progress = min(overflow / rd, 1.0)
-                    self._pending_dy -= self.speed * progress
+            if dist_right < rd:
+                progress = min((rd - dist_right) / rd, 1.0)
+                self._pending_dx += self.speed * progress
 
-            # Bottom edge: window goes past monitor bottom
-            elif cur_dist_bottom < 0:
-                overflow = self._initial_dist_bottom - cur_dist_bottom
-                if overflow > 0:
-                    progress = min(overflow / rd, 1.0)
-                    self._pending_dy += self.speed * progress
+            if dist_top < rd:
+                progress = min((rd - dist_top) / rd, 1.0)
+                self._pending_dy -= self.speed * progress
 
-            if self._pending_dx != 0 or self._pending_dy != 0:
+            if dist_bottom < rd:
+                progress = min((rd - dist_bottom) / rd, 1.0)
+                self._pending_dy += self.speed * progress
+
+            if self._pending_dx != before_x or self._pending_dy != before_y:
                 self._last_move_time = time.monotonic()
 
     def consume_delta(self) -> tuple[int, int]:
         """Return and clear pending (dx, dy) for moving other windows.
 
-        Returns inverted values: right overflow → camera right → other
-        windows move LEFT (negative dx). Same for vertical.
+        Returns inverted values: camera right → other windows move LEFT.
         Clamps by max_speed if set.
         """
         with self._lock:
@@ -324,11 +311,12 @@ class EdgeScrollState:
             return -int(round(dx)), -int(round(dy))
 
     def check_idle_timeout(self) -> bool:
-        """Auto-stop if no edge activity for _IDLE_TIMEOUT."""
+        """Auto-stop if no real scroll activity for _IDLE_TIMEOUT."""
         with self._lock:
             if self._active and (time.monotonic() - self._last_move_time) > self._IDLE_TIMEOUT:
                 self._active = False
                 self._dragged_addr = ""
+                self._confirmed_drag = False
                 self._pending_dx = 0.0
                 self._pending_dy = 0.0
                 return True
@@ -340,13 +328,16 @@ def cursor_poller(
     edge_scroll: EdgeScrollState,
     stop_event: threading.Event,
 ) -> None:
-    """Poll cursor position at ~60Hz, feed to PanningState and EdgeScrollState."""
+    """Poll cursor at ~60Hz; while edge-scrolling also poll real window geometry."""
     err_count = 0
     while not stop_event.is_set():
         try:
             x, y = hypr.get_cursor_pos()
             state.update_cursor(x, y)
-            edge_scroll.update_cursor(x, y)
+            if edge_scroll.active:
+                geo = hypr.get_active_window_geometry()
+                if geo is not None:
+                    edge_scroll.update_geometry(*geo)
             err_count = 0
         except Exception as e:
             err_count += 1

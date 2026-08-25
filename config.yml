@@ -25,4 +25,5 @@ edge_scroll:
   enabled: true                # auto-pan when dragged window goes past screen edge
   ramp_distance: 50              # px of overflow to reach max speed
   speed: 20.0                   # max px/frame (~1200 px/s at 60fps)
+  grab_dead_zone: 5              # px the window must move before camera engages
   # max_speed: 30              # optional: cap per-frame edge-scroll delta (pixels)

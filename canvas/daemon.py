@@ -124,6 +124,16 @@ class DaemonState:
         self.navigator.navigate("right")
         return "OK"
 
+    def _get_focused_window_address(self) -> str:
+        """Address of the focused window, empty string on failure."""
+        try:
+            resp = self.ipc.send("j/activewindow")
+            w: dict[str, Any] = json.loads(resp)
+            return str(w.get("address", ""))
+        except Exception as e:
+            log.debug("get focused window address failed: %s", e)
+            return ""
+
     def _find_window_at_cursor(self, cx: int, cy: int, workspace_id: int) -> dict[str, Any] | None:
         """Floating window on the workspace whose rect contains the cursor.
 
@@ -172,6 +182,13 @@ class DaemonState:
             # window, or a stale-focused window that sits off-screen.
             # Activating here would derive bogus grab offsets and send the
             # camera chasing an invisible window.
+            return "EDGE_NO_WINDOW"
+
+        # A real grab makes Hyprland focus the pressed window. If focus is
+        # elsewhere, this press landed on a border/gap inside the window's
+        # bounding rect — no drag will engage. Refuse before arming.
+        candidate_addr = str(win.get("address", ""))
+        if self._get_focused_window_address() != candidate_addr:
             return "EDGE_NO_WINDOW"
 
         at = win.get("at", [0, 0])
@@ -362,6 +379,7 @@ def run() -> None:
         speed=edge_cfg.get("speed", 20.0),
         max_speed=edge_cfg.get("max_speed"),
         enabled=edge_cfg.get("enabled", True),
+        grab_dead_zone=edge_cfg.get("grab_dead_zone", 5),
     )
 
     navigator = Navigator(

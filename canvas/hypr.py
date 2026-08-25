@@ -11,6 +11,7 @@ WARNING: Hyprland processes IPC synchronously — an unclosed connection
 freezes the compositor for up to 5 seconds. Always close promptly.
 """
 
+import json
 import logging
 import os
 import socket
@@ -96,6 +97,24 @@ class HyprIPC:
         parts = resp.split(", ")
         return int(parts[0]), int(parts[1])
 
+    def get_active_window_geometry(self) -> tuple[str, int, int, int, int] | None:
+        """Focused window as (address, x, y, width, height), or None if unknown.
+
+        During an interactive drag Hyprland focuses the dragged window, so
+        this is the ground truth for where the dragged window really is.
+        """
+        resp = self.send("j/activewindow")
+        w = json.loads(resp)
+        addr = str(w.get("address", ""))
+        at = w.get("at", [0, 0])
+        size = w.get("size", [0, 0])
+        if not addr or len(at) < 2 or len(size) < 2:
+            return None
+        try:
+            return addr, int(at[0]), int(at[1]), int(size[0]), int(size[1])
+        except (TypeError, ValueError):
+            return None
+
 
 _default: HyprIPC | None = None
 _default_lock = threading.Lock()
@@ -124,3 +143,8 @@ def eval_lua(lua: str) -> str:
 def get_cursor_pos() -> tuple[int, int]:
     """Query cursor position via the default HyprIPC instance."""
     return _get_default().get_cursor_pos()
+
+
+def get_active_window_geometry() -> tuple[str, int, int, int, int] | None:
+    """Focused window geometry via the default HyprIPC instance."""
+    return _get_default().get_active_window_geometry()

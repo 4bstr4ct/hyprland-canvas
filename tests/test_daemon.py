@@ -307,6 +307,7 @@ def test_handle_ipc_edge_start():
             '[{"address":"0xabc","floating":true,"at":[100,200],"size":[500,300],'
             '"workspace":{"id":3}}]'
         ),
+        json.dumps({"address": "0xabc"}),
         '[{"focused":true,"x":0,"y":0,"width":1920,"height":1080}]',
     ]
     ds = _make_daemon_state(ipc)
@@ -317,6 +318,27 @@ def test_handle_ipc_edge_start():
         assert ds.edge_scroll.active is True
         assert ds.edge_scroll.dragged_addr == "0xabc"
         assert ds.edge_scroll_workspace == 3
+
+
+def test_handle_ipc_edge_start_focus_mismatch_refuses():
+    """Press inside bounding rect but Hyprland focused another window →
+    the click landed on border/gap and no drag will engage. Must not arm."""
+    ipc = MagicMock()
+    ipc.send.side_effect = [
+        json.dumps({"id": 1}),
+        _clients_json(
+            '[{"address":"0xabc","floating":true,"at":[100,200],"size":[500,300],'
+            '"workspace":{"id":1}}]'
+        ),
+        json.dumps({"address": "0xfocused_elsewhere"}),
+    ]
+    ds = _make_daemon_state(ipc)
+
+    with patch("canvas.daemon.get_cursor_pos", return_value=(350, 350)):
+        result = ds.handle_ipc("EDGE_START")
+
+    assert result == "EDGE_NO_WINDOW"
+    assert ds.edge_scroll.active is False
 
 
 def test_handle_ipc_edge_start_no_window():
@@ -372,6 +394,7 @@ def test_handle_ipc_edge_start_picks_window_under_cursor():
             '{"address":"0xbbb","floating":true,"at":[600,100],"size":[400,300],'
             '"workspace":{"id":1}}]'
         ),
+        json.dumps({"address": "0xbbb"}),
         '[{"focused":true,"x":0,"y":0,"width":1920,"height":1080}]',
     ]
     ds = _make_daemon_state(ipc)
@@ -394,6 +417,7 @@ def test_handle_ipc_edge_start_overlap_last_wins():
             '{"address":"0xbbb","floating":true,"at":[150,150],"size":[400,300],'
             '"workspace":{"id":1}}]'
         ),
+        json.dumps({"address": "0xbbb"}),
         '[{"focused":true,"x":0,"y":0,"width":1920,"height":1080}]',
     ]
     ds = _make_daemon_state(ipc)
@@ -464,6 +488,7 @@ def test_handle_ipc_edge_start_no_monitor():
             '[{"address":"0xabc","floating":true,"at":[100,200],"size":[500,300],'
             '"workspace":{"id":3}}]'
         ),
+        json.dumps({"address": "0xabc"}),
         Exception("monitors query failed"),
     ]
     ds = _make_daemon_state(ipc)
