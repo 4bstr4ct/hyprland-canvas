@@ -112,6 +112,9 @@ class DaemonState:
         return f"UNKNOWN: {cmd}"
 
     def _handle_pan_start(self) -> str:
+        if self.edge_scroll.active:
+            self.edge_scroll.stop()
+            debug.dbg("MODE_SWITCH", to="pan", stopped="edge")
         self.fetch_baselines()
         result = self.panning.start_pan()
         debug.dbg("PAN_START", baselines=len(self.baselines), result=result)
@@ -174,6 +177,13 @@ class DaemonState:
 
     def _handle_edge_start(self) -> str:
         """Activate edge-scroll for the floating window under the cursor."""
+        if self.panning.is_dragging:
+            # Modes are mutually exclusive: a stale pan session would fight
+            # the edge camera (and vice versa below).
+            self.panning.stop_pan()
+            self.baselines = {}
+            debug.dbg("MODE_SWITCH", to="edge", stopped="pan")
+
         try:
             cx, cy = get_cursor_pos()
         except Exception as e:

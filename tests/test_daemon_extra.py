@@ -181,3 +181,51 @@ def test_fetch_monitor_rect_empty_list_returns_false():
     ipc.send.return_value = "[]"
     ds = _make_daemon_state(ipc)
     assert ds._fetch_monitor_rect() is False
+
+
+# --- mode exclusivity ---
+
+
+def test_edge_start_cancels_active_pan():
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+
+    ipc = MagicMock()
+    ipc.send.side_effect = [
+        '{"id":1}',
+        '[{"address":"0xabc","floating":true,"at":[100,100],"size":[400,300],"workspace":{"id":1}}]',
+        '{"address":"0xabc"}',
+        '[{"focused":true,"x":0,"y":0,"width":1920,"height":1080}]',
+    ]
+    ds.ipc = ipc
+    with patch("canvas.daemon.get_cursor_pos", return_value=(300, 250)):
+        result = ds.handle_ipc("EDGE_START")
+
+    assert result == "EDGE_ON"
+    assert ds.panning.pan_active is False
+    assert ds.baselines == {}
+
+
+def test_pan_start_cancels_active_edge_session():
+    ds = _make_daemon_state()
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=0,
+            win_y=0,
+            win_w=500,
+            win_h=300,
+            cursor_x=250,
+            cursor_y=150,
+        )
+    )
+    assert ds.edge_scroll.active is True
+
+    ipc = MagicMock()
+    ipc.send.return_value = "[]"
+    ds.ipc = ipc
+    ds.handle_ipc("PAN_START")
+
+    assert ds.edge_scroll.active is False
+    assert ds.panning.pan_active is True

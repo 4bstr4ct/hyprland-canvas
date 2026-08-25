@@ -165,6 +165,7 @@ class EdgeScrollState:
     """
 
     _IDLE_TIMEOUT = 0.5
+    CURSOR_MARGIN = 8  # px of slack around the dragged window for the cursor check
 
     def __init__(
         self,
@@ -261,8 +262,10 @@ class EdgeScrollState:
             self._pending_dy = 0.0
             return "EDGE_OFF"
 
-    def update_geometry(self, addr: str, x: int, y: int, w: int, h: int) -> None:
-        """Feed the dragged window's real geometry polled from Hyprland."""
+    def update_geometry(
+        self, addr: str, x: int, y: int, w: int, h: int, cursor_x: int, cursor_y: int
+    ) -> None:
+        """Feed the dragged window's real geometry plus cursor position."""
         with self._lock:
             if not self._active or not self.enabled:
                 return
@@ -277,6 +280,28 @@ class EdgeScrollState:
                     now=addr,
                 )
                 log.debug("edge-scroll lost dragged window %s (now %s)", self._dragged_addr, addr)
+                self._active = False
+                self._dragged_addr = ""
+                self._confirmed_drag = False
+                self._pending_dx = 0.0
+                self._pending_dy = 0.0
+                return
+
+            # The session lives only while the pointer stays on the dragged
+            # window (with slack for borders). Cursor elsewhere means the
+            # grab is gone — never let the camera chase a ghost.
+            margin = self.CURSOR_MARGIN
+            inside = (
+                x - margin <= cursor_x < x + w + margin and y - margin <= cursor_y < y + h + margin
+            )
+            if not inside:
+                debug.dbg(
+                    "EDGE_DISARM",
+                    s=self._session,
+                    reason="cursor_left",
+                    geo=(x, y, w, h),
+                    cursor=(cursor_x, cursor_y),
+                )
                 self._active = False
                 self._dragged_addr = ""
                 self._confirmed_drag = False
@@ -377,7 +402,7 @@ def cursor_poller(
             if edge_scroll.active:
                 geo = hypr.get_active_window_geometry()
                 if geo is not None:
-                    edge_scroll.update_geometry(*geo)
+                    edge_scroll.update_geometry(*geo, x, y)
                 now = time.monotonic()
                 if debug.enabled() and now - last_tick_log >= 0.1:
                     last_tick_log = now
