@@ -47,14 +47,32 @@ def test_ctl_main_edge_start_command():
 
 
 def test_ctl_main_no_response_no_print():
-    """canvas-ctl doesn't print if send_command returns empty string."""
+    """canvas-ctl exits 1 when send_command returns empty string."""
     with (
         patch.object(sys, "argv", ["canvas-ctl", "ping"]),
         patch("canvas.ipc.send_command", return_value=""),
         patch("builtins.print") as mock_print,
     ):
-        ctl_main()
-        mock_print.assert_not_called()
+        try:
+            ctl_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 1
+        mock_print.assert_called_once()
+
+
+def test_ctl_main_error_response_exits():
+    """canvas-ctl exits 1 when the daemon returns an ERROR response."""
+    with (
+        patch.object(sys, "argv", ["canvas-ctl", "ping"]),
+        patch("canvas.ipc.send_command", return_value="ERROR: daemon not running"),
+        patch("builtins.print"),
+    ):
+        try:
+            ctl_main()
+            raise AssertionError("should have exited")
+        except SystemExit as e:
+            assert e.code == 1
 
 
 def test_daemon_main_calls_run():

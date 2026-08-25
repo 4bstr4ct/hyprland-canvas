@@ -1,7 +1,10 @@
+import socket
 import threading
 import time
 
-from canvas.ipc import IpcServer, send_command
+import pytest
+
+from canvas.ipc import IpcServer, acquire_singleton, send_command
 
 
 def test_ipc_ping_pong(tmp_path):
@@ -70,3 +73,116 @@ def test_ipc_toggle_returns_state(tmp_path):
 
     server.stop()
     server_thread.join(timeout=2)
+
+
+# --- singleton guard ---
+
+
+def test_acquire_singleton_stale_socket_ok(tmp_path):
+    """A leftover socket file with no listener is not a running daemon."""
+    sock_path = str(tmp_path / "stale.sock")
+    open(sock_path, "w").close()  # stale file, nobody listening
+    acquire_singleton(sock_path)  # should not raise
+
+
+def test_acquire_singleton_rejects_live_daemon(tmp_path):
+    sock_path = str(tmp_path / "live.sock")
+    server = IpcServer(sock_path, lambda cmd: "PONG")
+    thread = threading.Thread(target=server.serve, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    try:
+        with pytest.raises(SystemExit, match="already running"):
+            acquire_singleton(sock_path)
+    finally:
+        server.stop()
+        thread.join(timeout=2)
+
+
+def test_acquire_singleton_lock_conflict(tmp_path):
+    """Holding the flock simulates a daemon that just bound between checks."""
+    import fcntl
+
+    sock_path = str(tmp_path / "x.sock")
+    holder = open(sock_path + ".lock", "w")  # noqa: SIM115
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(SystemExit, match="already running"):
+            acquire_singleton(sock_path)
+    finally:
+        holder.close()
+
+
+def test_acquire_singleton_released_after_process_death(tmp_path):
+    """After the lock holder closes the fd, acquisition succeeds again."""
+    sock_path = str(tmp_path / "y.sock")
+    acquire_singleton(sock_path)
+    from canvas.ipc import _held_lock
+
+    assert _held_lock is not None
+    _held_lock.close()
+    # reset module state for other tests
+    import canvas.ipc as ipc_mod
+
+    ipc_mod._held_lock = None
+    acquire_singleton(sock_path)  # should not raise
+
+
+# --- timeouts ---
+
+
+def test_server_survives_silent_client(tmp_path):
+    """A connected client that never sends must not wedge the server forever."""
+    sock_path = str(tmp_path / "wedge.sock")
+    received = []
+    server = IpcServer(sock_path, lambda cmd: (received.append(cmd), "OK")[1])
+    thread = threading.Thread(target=server.serve, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    wedge = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    wedge.connect(sock_path)  # connects, sends nothing
+
+    start = time.monotonic()
+    response = send_command("PING", sock_path=sock_path)
+    elapsed = time.monotonic() - start
+
+    assert response == "OK"
+    assert elapsed < 4.0  # unblocks after client timeout instead of hanging forever
+    assert "PING" in received
+
+    wedge.close()
+    server.stop()
+    thread.join(timeout=2)
+
+
+def test_send_command_timeout_returns_error(tmp_path):
+    """send_command reports an error instead of hanging on a dead peer."""
+    # bind-and-listen but never accept/respond
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    path = str(tmp_path / "deaf.sock")
+    srv.bind(path)
+    srv.listen(1)
+    try:
+        result = send_command("PING", sock_path=path)
+        assert result.startswith("ERROR")
+    finally:
+        srv.close()
+
+
+def test_send_command_connection_reset_returns_error(tmp_path):
+    """Handler exception must not hang or crash the client — empty reply comes back."""
+    sock_path = str(tmp_path / "reset.sock")
+
+    def hostile_handler(cmd):
+        raise ConnectionResetError("boom")
+
+    server = IpcServer(sock_path, hostile_handler)
+    thread = threading.Thread(target=server.serve, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+    result = send_command("PING", sock_path=sock_path)
+    server.stop()
+    thread.join(timeout=2)
+    assert result == ""

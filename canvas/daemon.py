@@ -11,7 +11,7 @@ from typing import Any
 
 from canvas.config import load
 from canvas.hypr import HyprIPC, get_cursor_pos
-from canvas.ipc import IpcServer
+from canvas.ipc import IpcServer, acquire_singleton
 from canvas.navigation import Navigator
 from canvas.panning import EdgeScrollParams, EdgeScrollState, PanningState, cursor_poller
 
@@ -284,6 +284,8 @@ def run() -> None:
     )
 
     ipc_server = IpcServer(handler=daemon_state.handle_ipc)
+
+    acquire_singleton(ipc_server.sock_path)
 
     stop_event = threading.Event()
 

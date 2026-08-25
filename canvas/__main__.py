@@ -50,8 +50,10 @@ def ctl_main() -> None:
         sys.exit(1)
 
     response = send_command(cmd)
-    if response:
-        print(response)
+    if not response or response.startswith("ERROR"):
+        print(response or "ERROR: empty response from daemon", file=sys.stderr)
+        sys.exit(1)
+    print(response)
 
 
 if __name__ == "__main__":

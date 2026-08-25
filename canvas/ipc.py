@@ -6,8 +6,10 @@ Client (canvas-ctl) sends a command, gets a response, exits.
 Security:
 - SO_PEERCRED: rejects connections from processes with different UID
 - Symlink check: refuses to bind if socket path is a symlink
+- Singleton: refuses to start if another canvasd owns the socket
 """
 
+import fcntl
 import logging
 import os
 import socket
@@ -18,6 +20,11 @@ from collections.abc import Callable
 log = logging.getLogger("canvas.ipc")
 
 _MY_UID = os.getuid()
+
+_CLIENT_TIMEOUT = 2.0
+_SERVER_RECV_TIMEOUT = 1.0  # must stay well below _CLIENT_TIMEOUT so queued
+# clients are still served within their own budget
+_MAX_CONTROL_RESPONSE = 64 * 1024
 
 
 def _default_socket_path() -> str:
@@ -39,6 +46,47 @@ def _get_peer_uid(conn: socket.socket) -> int | None:
         return int(uid)
     except (AttributeError, OSError):
         return None
+
+
+def _daemon_alive(sock_path: str) -> bool:
+    """True if a process is accepting connections on sock_path."""
+    if not os.path.exists(sock_path):
+        return False
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(sock_path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+_held_lock = None
+
+
+def acquire_singleton(sock_path: str | None = None) -> None:
+    """Ensure only one canvasd runs for this socket path.
+
+    Raises SystemExit if another daemon is alive (live socket or held lock).
+    On success, keeps an exclusive flock on "<sock_path>.lock" for the
+    process lifetime, which closes the check-then-bind race.
+    """
+    global _held_lock
+    path = sock_path or _default_socket_path()
+
+    if _daemon_alive(path):
+        raise SystemExit(f"canvasd already running on {path}, exiting")
+
+    # Lock fd intentionally stays open for the whole process lifetime.
+    lock = open(path + ".lock", "w")  # noqa: SIM115
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise SystemExit(f"canvasd already running (lock {path}.lock), exiting") from None
+    _held_lock = lock
 
 
 class IpcServer:
@@ -82,11 +130,14 @@ class IpcServer:
                 continue
 
             try:
+                conn.settimeout(_SERVER_RECV_TIMEOUT)
                 data = conn.recv(1024)
                 if data:
                     cmd = data.decode("utf-8").strip()
                     response = self._handler(cmd)
                     conn.sendall(response.encode("utf-8"))
+            except TimeoutError:
+                log.warning("IPC client timed out without sending a command")
             except Exception as e:
                 log.debug("IPC client handler error: %s", e)
             finally:
@@ -101,11 +152,15 @@ class IpcServer:
 
 
 def send_command(cmd: str, sock_path: str | None = None) -> str:
-    """Send a command to the canvas daemon and return the response."""
+    """Send a command to the canvas daemon and return the response.
+
+    Returns a string starting with "ERROR:" on any failure.
+    """
     path = sock_path or _default_socket_path()
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
+        sock.settimeout(_CLIENT_TIMEOUT)
         sock.connect(path)
         sock.sendall(cmd.encode("utf-8"))
         sock.shutdown(socket.SHUT_WR)
@@ -116,11 +171,17 @@ def send_command(cmd: str, sock_path: str | None = None) -> str:
             if not chunk:
                 break
             response += chunk
+            if len(response) > _MAX_CONTROL_RESPONSE:
+                return "ERROR: daemon response too large"
 
         return response.decode("utf-8")
     except ConnectionRefusedError:
         return "ERROR: daemon not running"
     except FileNotFoundError:
         return "ERROR: socket not found — is canvasd running?"
+    except TimeoutError:
+        return "ERROR: daemon did not respond in time"
+    except OSError as e:
+        return f"ERROR: {e}"
     finally:
         sock.close()
