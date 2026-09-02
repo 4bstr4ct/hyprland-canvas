@@ -202,6 +202,10 @@ class Navigator:
         toggle_state.save(self._canvas_mode_workspaces)
 
     def canvas_toggle(self) -> str:
+        # Backward-compat alias — single word `canvas-toggle` still means "all"
+        return self.canvas_toggle_all()
+
+    def canvas_toggle_all(self) -> str:
         workspace_id = self._get_active_workspace_id()
         if workspace_id is None:
             return "ERROR:NO_WORKSPACE"
@@ -221,6 +225,29 @@ class Navigator:
         self._persist_canvas_state()
         self._set_all_floating(workspace_id, floating=True)
         return "CANVAS_ON"
+
+    def canvas_toggle_single(self) -> str:
+        focused = self._get_focused_window()
+        if focused is None or "address" not in focused:
+            return "ERROR:NO_FOCUS"
+        addr = str(focused["address"])
+        if not _VALID_ADDR.match(addr):
+            return "ERROR:BAD_ADDRESS"
+        was_floating = bool(focused.get("floating"))
+        try:
+            lua = (
+                f'local w = nil\n'
+                f'for _, win in ipairs(hl.get_windows({{}})) do\n'
+                f'  if tostring(win.address) == "{addr}" then w = win; break end\n'
+                f'end\n'
+                f'if w then hl.dispatch(hl.dsp.window.float({{'
+                f' action = "toggle", window = w }})) end'
+            )
+            self._ipc.eval_lua(lua)
+        except Exception as e:
+            log.warning("toggle single failed: %s", e)
+            return "ERROR:TOGGLE_FAILED"
+        return "TILED" if was_floating else "FLOATED"
 
     def _snapshot_tiled_windows(
         self, workspace_id: int
@@ -297,7 +324,9 @@ class Navigator:
                 "    hl.dispatch(hl.dsp.window.resize({"
                 " width=g.size[1], height=g.size[2], window=w }))"
             )
-            lines.append("    hl.dispatch(hl.dsp.window.float({ action = \"toggle\" }))")
+            lines.append(
+                "    hl.dispatch(hl.dsp.window.float({ action = \"toggle\", window = w }))"
+            )
             lines.append("  end")
             lines.append("end")
         else:

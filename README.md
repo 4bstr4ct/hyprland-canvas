@@ -21,6 +21,7 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 | Edge-scroll | SUPER+LMB | Drag a floating window toward the screen edge — camera follows (engages only for a confirmed drag of the window under the cursor) |
 | Navigate | SUPER+SHIFT+Arrows | Spatial jump to nearest window in direction (up/down/left/right), auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
+| Toggle single | SUPER+SHIFT+V | Toggle focused window floating ↔ tiled |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
 
 ## Install
@@ -109,6 +110,9 @@ end)
 hl.key.bind({"SUPER", "SHIFT"}, "C", function()
     os.execute("canvas-ctl canvas-toggle")
 end)
+hl.key.bind({"SUPER", "SHIFT"}, "V", function()
+    os.execute("canvas-ctl canvas-toggle-single")
+end)
 hl.key.bind({"SUPER", "SHIFT"}, "G", function()
     os.execute("canvas-ctl toggle")
 end)
@@ -125,7 +129,9 @@ canvas-ctl nav-left          # navigate to nearest window left
 canvas-ctl nav-right         # navigate to nearest window right
 canvas-ctl nav-up            # navigate to nearest window up
 canvas-ctl nav-down          # navigate to nearest window down
-canvas-ctl canvas-toggle     # toggle floating on current workspace
+canvas-ctl canvas-toggle     # toggle floating on current workspace (alias for -all)
+canvas-ctl canvas-toggle-all # toggle all windows on workspace (explicit)
+canvas-ctl canvas-toggle-single # toggle focused window only
 canvas-ctl toggle            # invert pan direction
 canvas-ctl edge-start       # start edge-scroll (called by mouse bind)
 canvas-ctl edge-stop        # stop edge-scroll (called by mouse release bind)

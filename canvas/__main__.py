@@ -27,7 +27,8 @@ def ctl_main() -> None:
     if len(sys.argv) < 2:
         cmds = (
             "pan-start|pan-stop|nav-left|nav-right|nav-up|nav-down|toggle|"
-            "canvas-toggle|edge-start|edge-stop|ping|status"
+            "canvas-toggle|canvas-toggle-all|canvas-toggle-single|"
+            "edge-start|edge-stop|ping|status"
         )
         print(f"Usage: canvas-ctl <{cmds}>", file=sys.stderr)
         sys.exit(1)
@@ -42,6 +43,8 @@ def ctl_main() -> None:
         "NAV_DOWN",
         "TOGGLE",
         "CANVAS_TOGGLE",
+        "CANVAS_TOGGLE_ALL",
+        "CANVAS_TOGGLE_SINGLE",
         "EDGE_START",
         "EDGE_STOP",
         "PING",

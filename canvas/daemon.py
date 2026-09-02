@@ -98,6 +98,8 @@ class DaemonState:
         "EDGE_STOP": "_handle_edge_stop",
         "TOGGLE": "_handle_toggle",
         "CANVAS_TOGGLE": "_handle_canvas_toggle",
+        "CANVAS_TOGGLE_ALL": "_handle_canvas_toggle_all",
+        "CANVAS_TOGGLE_SINGLE": "_handle_canvas_toggle_single",
         "PING": "_handle_ping",
         "STATUS": "_handle_status",
     }
@@ -279,6 +281,12 @@ class DaemonState:
 
     def _handle_canvas_toggle(self) -> str:
         return self.navigator.canvas_toggle()
+
+    def _handle_canvas_toggle_all(self) -> str:
+        return self.navigator.canvas_toggle_all()
+
+    def _handle_canvas_toggle_single(self) -> str:
+        return self.navigator.canvas_toggle_single()
 
     def _handle_ping(self) -> str:
         return "PONG"
