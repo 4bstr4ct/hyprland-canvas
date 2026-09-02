@@ -71,7 +71,7 @@ def load(path: str | None = None) -> State:
                 continue
             state[ws_id] = _parse_snapshot(v)
         if debug.enabled():
-            debug.dbg(
+            debug.dbg2(
                 "STATE_LOAD",
                 path=file,
                 workspaces=sorted(state.keys()),
@@ -82,12 +82,12 @@ def load(path: str | None = None) -> State:
         return state
     except FileNotFoundError:
         if debug.enabled():
-            debug.dbg("STATE_LOAD", path=file, workspaces=[], counts={})
+            debug.dbg2("STATE_LOAD", path=file, workspaces=[], counts={})
         return {}
     except Exception as e:
         log.warning("could not read toggle state %s: %s", file, e)
         if debug.enabled():
-            debug.dbg("STATE_LOAD_ERROR", path=file, error=str(e))
+            debug.dbg2("STATE_LOAD_ERROR", path=file, error=str(e))
         return {}
 
 
@@ -106,7 +106,7 @@ def save(state: State, path: str | None = None) -> None:
             json.dump(serializable, f)
         os.replace(tmp, file)
         if debug.enabled():
-            debug.dbg(
+            debug.dbg2(
                 "STATE_SAVE",
                 path=file,
                 workspaces=sorted(state.keys()),
@@ -117,4 +117,4 @@ def save(state: State, path: str | None = None) -> None:
     except Exception as e:
         log.warning("could not write toggle state %s: %s", file, e)
         if debug.enabled():
-            debug.dbg("STATE_SAVE_ERROR", path=file, error=str(e))
+            debug.dbg2("STATE_SAVE_ERROR", path=file, error=str(e))

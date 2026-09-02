@@ -59,7 +59,7 @@ class Navigator:
                 self._canvas_mode_workspaces[ws] = {}
         if debug.enabled():
             counts = {ws: len(s) for ws, s in self._canvas_mode_workspaces.items()}
-            debug.dbg(
+            debug.dbg2(
                 "STATE_LOAD",
                 workspaces=sorted(raw.keys()),
                 counts=counts,
@@ -225,7 +225,7 @@ class Navigator:
             snapshot = self._canvas_mode_workspaces.pop(workspace_id)
             self._persist_canvas_state()
             if debug.enabled():
-                debug.dbg(
+                debug.dbg2(
                     "TOGGLE_OFF",
                     ws=workspace_id,
                     count=len(snapshot),
@@ -245,7 +245,7 @@ class Navigator:
         self._canvas_mode_workspaces[workspace_id] = tiled_snapshot
         self._persist_canvas_state()
         if debug.enabled():
-            debug.dbg(
+            debug.dbg2(
                 "TOGGLE_ON",
                 ws=workspace_id,
                 count=len(tiled_snapshot),
@@ -323,7 +323,7 @@ class Navigator:
                         "title": str(w.get("title", ""))[:40],
                     }
             if debug.enabled():
-                debug.dbg(
+                debug.dbg2(
                     "SNAPSHOT_CREATE",
                     ws=workspace_id,
                     count=len(snap),
@@ -348,11 +348,11 @@ class Navigator:
         safe_addrs = [a for a in snapshot if _VALID_ADDR.match(a)]
         if not safe_addrs:
             if debug.enabled():
-                debug.dbg("TILE_START", ws=workspace_id, targets=0, addrs=[])
+                debug.dbg2("TILE_START", ws=workspace_id, targets=0, addrs=[])
             return
         ws_id = _safe_int(workspace_id, "workspace_id")
         if debug.enabled():
-            debug.dbg(
+            debug.dbg2(
                 "TILE_START",
                 ws=workspace_id,
                 targets=len(safe_addrs),
@@ -419,15 +419,15 @@ class Navigator:
             lines.append("  end")
             lines.append("end")
         if debug.enabled():
-            debug.dbg("TILE_LUA", ws=workspace_id, lines=len(lines), preview="; ".join(lines[:2]))
+            debug.dbg2("TILE_LUA", ws=workspace_id, lines=len(lines), preview="; ".join(lines[:2]))
         try:
             self._ipc.eval_lua("\n".join(lines))
             if debug.enabled():
-                debug.dbg("TILE_DONE", ws=workspace_id, targets=len(safe_addrs))
+                debug.dbg2("TILE_DONE", ws=workspace_id, targets=len(safe_addrs))
         except Exception as e:
             log.warning("tile windows failed: %s", e)
             if debug.enabled():
-                debug.dbg("TILE_ERROR", ws=workspace_id, error=str(e))
+                debug.dbg2("TILE_ERROR", ws=workspace_id, error=str(e))
 
     def _set_all_floating(self, workspace_id: int, floating: bool) -> None:
         """Make every currently-tiled window on the workspace floating (canvas ON).
@@ -448,7 +448,7 @@ class Navigator:
                         if not w.get("floating")
                         and w.get("workspace", {}).get("id") == workspace_id
                     ]
-                    debug.dbg(
+                    debug.dbg2(
                         "FLOAT_START",
                         ws=workspace_id,
                         count=len(tiled),
@@ -476,11 +476,11 @@ class Navigator:
             )
             self._ipc.eval_lua(lua)
             if debug.enabled():
-                debug.dbg("FLOAT_DONE", ws=workspace_id, floating=floating)
+                debug.dbg2("FLOAT_DONE", ws=workspace_id, floating=floating)
         except Exception as e:
             log.warning("set_all_floating failed: %s", e)
             if debug.enabled():
-                debug.dbg("FLOAT_ERROR", ws=workspace_id, error=str(e))
+                debug.dbg2("FLOAT_ERROR", ws=workspace_id, error=str(e))
 
     def _is_protected(self, window: dict[str, Any]) -> bool:
         """Check if window class matches a protected app."""

@@ -118,16 +118,16 @@ class DaemonState:
     def _handle_pan_start(self) -> str:
         if self.edge_scroll.active:
             self.edge_scroll.stop()
-            debug.dbg("MODE_SWITCH", to="pan", stopped="edge")
+            debug.dbg2("MODE_SWITCH", to="pan", stopped="edge")
         self.fetch_baselines()
         result = self.panning.start_pan()
-        debug.dbg("PAN_START", baselines=len(self.baselines), result=result)
+        debug.dbg2("PAN_START", baselines=len(self.baselines), result=result)
         return result
 
     def _handle_pan_stop(self) -> str:
         self.panning.stop_pan()
         self.baselines = {}
-        debug.dbg("PAN_STOP")
+        debug.dbg2("PAN_STOP")
         return "PAN_OFF"
 
     def _handle_nav_left(self) -> str:
@@ -194,7 +194,7 @@ class DaemonState:
             # the edge camera (and vice versa below).
             self.panning.stop_pan()
             self.baselines = {}
-            debug.dbg("MODE_SWITCH", to="edge", stopped="pan")
+            debug.dbg2("MODE_SWITCH", to="edge", stopped="pan")
 
         try:
             cx, cy = get_cursor_pos()
