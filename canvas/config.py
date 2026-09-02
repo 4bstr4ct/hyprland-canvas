@@ -40,6 +40,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_speed": None,
         "grab_dead_zone": 5,
     },
+    "canvas": {
+        "preserve_geometry": True,
+    },
 }
 
 
@@ -109,6 +112,15 @@ def validate(cfg: dict[str, Any]) -> list[str]:
         gdz = es.get("grab_dead_zone")
         if not isinstance(gdz, int) or isinstance(gdz, bool) or gdz <= 0:
             errors.append(f"edge_scroll.grab_dead_zone must be an integer > 0, got {gdz!r}")
+
+    canvas_cfg = cfg.get("canvas")
+    if not isinstance(canvas_cfg, dict):
+        errors.append("canvas section must be a mapping")
+    elif not isinstance(canvas_cfg.get("preserve_geometry"), bool):
+        errors.append(
+            "canvas.preserve_geometry must be a boolean, "
+            f"got {canvas_cfg.get('preserve_geometry')!r}"
+        )
 
     return errors
 

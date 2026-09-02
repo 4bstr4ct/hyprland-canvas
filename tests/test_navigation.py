@@ -150,7 +150,10 @@ def test_canvas_toggle_on_records_tiled_snapshot():
         with patch.object(nav, "_get_active_workspace_id", return_value=1):
             assert nav.canvas_toggle() == "CANVAS_ON"
 
-        assert nav._canvas_mode_workspaces[1] == {"0x1"}
+        # New format: snapshot is dict addr -> {at, size}
+        assert "0x1" in nav._canvas_mode_workspaces[1]
+        assert nav._canvas_mode_workspaces[1]["0x1"]["at"] == [0, 0]
+        assert nav._canvas_mode_workspaces[1]["0x1"]["size"] == [100, 100]
         lua = ipc.eval_lua.call_args[0][0]
         assert "floating = false" in lua
         msave.assert_called_once()

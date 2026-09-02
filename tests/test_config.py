@@ -173,12 +173,28 @@ def test_toggle_state_roundtrip(tmp_path):
     from canvas.toggle_state import save as ts_save
 
     file = str(tmp_path / "toggle.json")
-    state = {1: ["0xabc", "0x2"], 7: ["0xfff"]}
+    state = {
+        1: {"0xabc": {"at": [10, 20], "size": [500, 300]}, "0x2": {}},
+        7: {"0xfff": {"at": [0, 0], "size": [100, 100]}},
+    }
     ts_save(state, path=file)
     loaded = ts_load(path=file)
-    assert {ws: set(addrs) for ws, addrs in loaded.items()} == {
-        ws: set(addrs) for ws, addrs in state.items()
-    }
+    assert loaded == state
+
+
+def test_toggle_state_roundtrip_legacy_list(tmp_path):
+    """Old list format is migrated to dict with empty geometry."""
+    from canvas.toggle_state import load as ts_load
+
+    file = str(tmp_path / "toggle.json")
+    # Simulate old file on disk directly
+    import json
+
+    with open(file, "w") as f:
+        json.dump({"1": ["0xabc", "0x2"], "7": ["0xfff"]}, f)
+    loaded = ts_load(path=file)
+    assert set(loaded[1].keys()) == {"0xabc", "0x2"}
+    assert set(loaded[7].keys()) == {"0xfff"}
 
 
 def test_toggle_state_load_missing_file(tmp_path):

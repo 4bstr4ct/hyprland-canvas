@@ -27,3 +27,6 @@ edge_scroll:
   speed: 20.0                   # max px/frame (~1200 px/s at 60fps)
   grab_dead_zone: 5              # px the window must move before camera engages
   # max_speed: 30              # optional: cap per-frame edge-scroll delta (pixels)
+
+canvas:
+  preserve_geometry: true      # remember tiled window geometry for exact toggle restore

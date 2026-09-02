@@ -19,7 +19,7 @@ Hyprland has no built-in infinite desktop. This daemon provides one by communica
 |---------|---------|-------------|
 | Pan canvas | SUPER+SHIFT+LMB | Drag to pan all floating windows |
 | Edge-scroll | SUPER+LMB | Drag a floating window toward the screen edge — camera follows (engages only for a confirmed drag of the window under the cursor) |
-| Navigate | SUPER+SHIFT+Left/Right | Jump to next/prev window, auto-pan to center |
+| Navigate | SUPER+SHIFT+Arrows | Spatial jump to nearest window in direction (up/down/left/right), auto-pan to center |
 | Canvas toggle | SUPER+SHIFT+C | Toggle all windows on workspace to/from floating |
 | Invert | SUPER+SHIFT+G | Invert pan direction |
 
@@ -91,12 +91,18 @@ hl.bind("SUPER + mouse:272", function()
     hl.exec_cmd("canvas-ctl edge-stop")
 end, { mouse = true, release = true })
 
--- Canvas: navigation
+-- Canvas: navigation (4-dir spatial)
 hl.key.bind({"SUPER", "SHIFT"}, "left", function()
     os.execute("canvas-ctl nav-left")
 end)
 hl.key.bind({"SUPER", "SHIFT"}, "right", function()
     os.execute("canvas-ctl nav-right")
+end)
+hl.key.bind({"SUPER", "SHIFT"}, "up", function()
+    os.execute("canvas-ctl nav-up")
+end)
+hl.key.bind({"SUPER", "SHIFT"}, "down", function()
+    os.execute("canvas-ctl nav-down")
 end)
 
 -- Canvas: toggle & invert
@@ -115,8 +121,10 @@ canvas-ctl ping              # check if daemon is running
 canvas-ctl status            # show pan direction and state
 canvas-ctl pan-start         # start panning (called by mouse bind)
 canvas-ctl pan-stop          # stop panning (called by mouse release bind)
-canvas-ctl nav-left          # navigate to previous window
-canvas-ctl nav-right         # navigate to next window
+canvas-ctl nav-left          # navigate to nearest window left
+canvas-ctl nav-right         # navigate to nearest window right
+canvas-ctl nav-up            # navigate to nearest window up
+canvas-ctl nav-down          # navigate to nearest window down
 canvas-ctl canvas-toggle     # toggle floating on current workspace
 canvas-ctl toggle            # invert pan direction
 canvas-ctl edge-start       # start edge-scroll (called by mouse bind)
@@ -143,6 +151,8 @@ navigation:
     - brave-browser
     - chromium
     - firefox
+canvas:
+  preserve_geometry: true     # remember tiled window positions/sizes for exact restore
 ```
 
 Invalid values (wrong type, zero/negative numbers) are rejected at daemon startup with the exact offending keys listed on stderr.

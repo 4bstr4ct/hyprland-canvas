@@ -35,21 +35,116 @@ class Navigator:
         ipc: HyprIPC,
         protected_apps: list[str],
         cooldown: float = 0.2,
+        preserve_geometry: bool = True,
     ) -> None:
         self._ipc = ipc
         self._protected_apps = [a.lower() for a in protected_apps]
         self._cooldown = cooldown
+        self._preserve_geometry = preserve_geometry
         self._last_nav_time = 0.0
-        # workspace id -> addresses that were TILED before canvas mode went on.
-        # Only these are tiled again on OFF, so windows the user kept floating
-        # before enabling canvas mode are never touched.
-        loaded = toggle_state.load()
-        self._canvas_mode_workspaces: dict[int, set[str]] = {
-            ws: set(addrs) for ws, addrs in loaded.items()
+        # workspace id -> snapshot of TILED windows before canvas ON.
+        # Only these are tiled again on OFF. When preserve_geometry is true,
+        # each entry also stores at/size to restore exact floating geometry.
+        raw = toggle_state.load()
+        self._canvas_mode_workspaces: dict[int, dict[str, dict[str, list[int]]]] = {}
+        for ws, snap in raw.items():
+            if isinstance(snap, list):
+                # Legacy format (list of addresses) — from mocked load in tests or old file
+                self._canvas_mode_workspaces[ws] = {str(a): {} for a in snap if isinstance(a, str)}
+            elif isinstance(snap, dict):
+                self._canvas_mode_workspaces[ws] = dict(snap)
+            else:
+                self._canvas_mode_workspaces[ws] = {}
+
+    @staticmethod
+    def _window_center(w: dict[str, Any]) -> tuple[int, int]:
+        return w["at"][0] + w["size"][0] // 2, w["at"][1] + w["size"][1] // 2
+
+    @staticmethod
+    def _window_bounds(w: dict[str, Any]) -> dict[str, int]:
+        x, y = w["at"][0], w["at"][1]
+        ww, wh = w["size"][0], w["size"][1]
+        return {
+            "left": x,
+            "right": x + ww,
+            "top": y,
+            "bottom": y + wh,
+            "center_x": x + ww // 2,
+            "center_y": y + wh // 2,
         }
 
+    @staticmethod
+    def _overlap_h(b1: dict[str, int], b2: dict[str, int]) -> bool:
+        return not (b1["right"] <= b2["left"] or b1["left"] >= b2["right"])
+
+    @staticmethod
+    def _overlap_v(b1: dict[str, int], b2: dict[str, int]) -> bool:
+        return not (b1["bottom"] <= b2["top"] or b1["top"] >= b2["bottom"])
+
+    def _find_spatial_target(
+        self,
+        floating: list[dict[str, Any]],
+        current_bounds: dict[str, int],
+        current_center: tuple[int, int],
+        direction: str,
+    ) -> dict[str, Any] | None:
+        cx, cy = current_center
+        candidates = [w for w in floating if not self._is_protected(w)]
+        if not candidates:
+            return None
+
+        # Tier 1: overlapping band + direction
+        aligned: list[tuple[dict[str, Any], int]] = []
+        for w in candidates:
+            b = self._window_bounds(w)
+            wx, wy = b["center_x"], b["center_y"]
+            if direction == "left" and self._overlap_v(current_bounds, b) and wx < cx:
+                aligned.append((w, cx - wx))
+            elif direction == "right" and self._overlap_v(current_bounds, b) and wx > cx:
+                aligned.append((w, wx - cx))
+            elif direction == "up" and self._overlap_h(current_bounds, b) and wy < cy:
+                aligned.append((w, cy - wy))
+            elif direction == "down" and self._overlap_h(current_bounds, b) and wy > cy:
+                aligned.append((w, wy - cy))
+        if aligned:
+            return sorted(aligned, key=lambda x: x[1])[0][0]
+
+        # Tier 2: any window in direction
+        same_dir: list[tuple[dict[str, Any], int]] = []
+        for w in candidates:
+            b = self._window_bounds(w)
+            wx, wy = b["center_x"], b["center_y"]
+            if direction == "left" and wx < cx:
+                same_dir.append((w, cx - wx))
+            elif direction == "right" and wx > cx:
+                same_dir.append((w, wx - cx))
+            elif direction == "up" and wy < cy:
+                same_dir.append((w, cy - wy))
+            elif direction == "down" and wy > cy:
+                same_dir.append((w, wy - cy))
+        if same_dir:
+            return sorted(same_dir, key=lambda x: x[1])[0][0]
+
+        # Tier 3: wrap — farthest in opposite direction
+        opp = {"left": "right", "right": "left", "up": "down", "down": "up"}[direction]
+        wrap: list[tuple[dict[str, Any], int]] = []
+        for w in candidates:
+            b = self._window_bounds(w)
+            wx, wy = b["center_x"], b["center_y"]
+            if opp == "left" and wx < cx:
+                wrap.append((w, cx - wx))
+            elif opp == "right" and wx > cx:
+                wrap.append((w, wx - cx))
+            elif opp == "up" and wy < cy:
+                wrap.append((w, cy - wy))
+            elif opp == "down" and wy > cy:
+                wrap.append((w, wy - cy))
+        if wrap:
+            return sorted(wrap, key=lambda x: x[1])[0][0]
+        return None
+
     def navigate(self, direction: str) -> None:
-        """Navigate to the next/prev floating window, panning the canvas to center it."""
+        """Navigate to the nearest floating window in direction, panning canvas."""
         current_time = time.monotonic()
         if current_time - self._last_nav_time < self._cooldown:
             return
@@ -68,40 +163,43 @@ class Navigator:
             return
 
         current_addr = focused["address"]
-        current_index = -1
-        for i, w in enumerate(floating):
-            if w["address"] == current_addr:
-                current_index = i
-                break
-
-        if current_index == -1:
+        current_win = next((w for w in floating if w["address"] == current_addr), None)
+        if current_win is None:
             return
 
-        # Find next non-protected window in direction
-        new_index = current_index
-        attempts = 0
-        while attempts < len(floating):
-            if direction == "right":
-                new_index = (new_index + 1) % len(floating)
-            else:
-                new_index = (new_index - 1) % len(floating)
+        current_bounds = self._window_bounds(current_win)
+        current_center = self._window_center(current_win)
 
-            if not self._is_protected(floating[new_index]):
-                break
-            attempts += 1
+        target = self._find_spatial_target(floating, current_bounds, current_center, direction)
+        # Fallback: circular index order (legacy behavior) when no spatial candidate
+        target_addr: str | None = None
+        if target is not None:
+            target_addr = target["address"]
+        else:
+            # No window in that direction spatially — cycle by index (protected-aware)
+            current_index = next(
+                (i for i, w in enumerate(floating) if w["address"] == current_addr), -1
+            )
+            if current_index != -1:
+                idx = current_index
+                for _ in range(len(floating)):
+                    if direction in ("right", "down"):
+                        idx = (idx + 1) % len(floating)
+                    else:
+                        idx = (idx - 1) % len(floating)
+                    if not self._is_protected(floating[idx]):
+                        target_addr = floating[idx]["address"]
+                        break
 
-        if attempts >= len(floating):
-            return  # all windows are protected
+        if target_addr is None:
+            return
 
         center_x, center_y = self._get_monitor_center()
-        # Re-fetch floating windows (positions may have changed)
         floating_updated = self._get_floating_windows(workspace_id)
-        self._pan_to_window(
-            floating_updated, floating[new_index]["address"], center_x, center_y, workspace_id
-        )
+        self._pan_to_window(floating_updated, target_addr, center_x, center_y, workspace_id)
 
     def _persist_canvas_state(self) -> None:
-        toggle_state.save({ws: sorted(a) for ws, a in self._canvas_mode_workspaces.items()})
+        toggle_state.save(self._canvas_mode_workspaces)
 
     def canvas_toggle(self) -> str:
         workspace_id = self._get_active_workspace_id()
@@ -118,45 +216,101 @@ class Navigator:
             # nothing to tile back, and that is not an error.
             return "CANVAS_OFF"
 
-        tiled_addrs = self._snapshot_tiled_windows(workspace_id)
-        self._canvas_mode_workspaces[workspace_id] = tiled_addrs
+        tiled_snapshot = self._snapshot_tiled_windows(workspace_id)
+        self._canvas_mode_workspaces[workspace_id] = tiled_snapshot
         self._persist_canvas_state()
         self._set_all_floating(workspace_id, floating=True)
         return "CANVAS_ON"
 
-    def _snapshot_tiled_windows(self, workspace_id: int) -> set[str]:
-        """Addresses of currently tiled windows on the workspace (pre-canvas state)."""
+    def _snapshot_tiled_windows(
+        self, workspace_id: int
+    ) -> dict[str, dict[str, list[int]]]:
+        """Snapshot of currently tiled windows on the workspace (pre-canvas state).
+
+        When preserve_geometry is true, each entry stores at/size for exact restore.
+        """
         try:
             resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
-            return {
-                w["address"]
-                for w in clients
-                if not w.get("floating")
-                and w.get("address")
-                and (ws := w.get("workspace")) is not None
-                and ws.get("id") == workspace_id
-            }
+            snap: dict[str, dict[str, list[int]]] = {}
+            for w in clients:
+                if w.get("floating"):
+                    continue
+                addr = w.get("address")
+                if not addr or not isinstance(addr, str):
+                    continue
+                wsw = w.get("workspace")
+                if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:
+                    continue
+                if self._preserve_geometry:
+                    at = w.get("at", [0, 0])
+                    size = w.get("size", [0, 0])
+                    try:
+                        snap[addr] = {
+                            "at": [int(at[0]), int(at[1])],
+                            "size": [int(size[0]), int(size[1])],
+                        }
+                    except Exception:
+                        snap[addr] = {}
+                else:
+                    snap[addr] = {}
+            return snap
         except Exception as e:
             log.warning("snapshot tiled windows failed: %s", e)
-            return set()
+            return {}
 
-    def _tile_windows(self, workspace_id: int, addresses: set[str]) -> None:
-        """Tile exactly the windows recorded in the snapshot, leaving others floating."""
-        safe_addrs = [a for a in addresses if _VALID_ADDR.match(a)]
+    def _tile_windows(
+        self, workspace_id: int, snapshot: dict[str, dict[str, list[int]]]
+    ) -> None:
+        """Tile exactly the windows recorded in the snapshot, leaving others floating.
+
+        When geometry was preserved, moves/resizes each floating window to its
+        saved at/size before toggling it tiled (mirrors v2's restore path).
+        """
+        safe_addrs = [a for a in snapshot if _VALID_ADDR.match(a)]
         if not safe_addrs:
             return
         ws_id = _safe_int(workspace_id, "workspace_id")
-        lines = ["local targets = {"]
-        lines.extend(f'  ["{a}"] = true,' for a in sorted(safe_addrs))
-        lines.append("}")
-        lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
-        lines.append("for _, w in ipairs(ws) do")
-        lines.append("  if targets[tostring(w.address)] then")
-        lines.append("    hl.dispatch(hl.dsp.focus({ window = w }))")
-        lines.append('    hl.dispatch(hl.dsp.window.float({ action = "toggle" }))')
-        lines.append("  end")
-        lines.append("end")
+        if self._preserve_geometry and any(snapshot.get(a, {}).get("at") for a in safe_addrs):
+            # Geometry-aware restore: move+resize then toggle
+            lines = ["local geos = {"]
+            for addr in sorted(safe_addrs):
+                geo = snapshot.get(addr, {})
+                at = geo.get("at", [0, 0])
+                size = geo.get("size", [0, 0])
+                try:
+                    ax, ay = int(at[0]), int(at[1])
+                    sw, sh = int(size[0]), int(size[1])
+                except Exception:
+                    ax, ay, sw, sh = 0, 0, 0, 0
+                lines.append(f'  ["{addr}"] = {{at={{{ax},{ay}}}, size={{{sw},{sh}}}}},')
+            lines.append("}")
+            lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
+            lines.append("for _, w in ipairs(ws) do")
+            lines.append("  local g = geos[tostring(w.address)]")
+            lines.append("  if g then")
+            lines.append(
+                "    hl.dispatch(hl.dsp.window.move({"
+                " x=g.at[1], y=g.at[2], relative=false, window=w }))"
+            )
+            lines.append(
+                "    hl.dispatch(hl.dsp.window.resize({"
+                " width=g.size[1], height=g.size[2], window=w }))"
+            )
+            lines.append("    hl.dispatch(hl.dsp.window.float({ action = \"toggle\" }))")
+            lines.append("  end")
+            lines.append("end")
+        else:
+            lines = ["local targets = {"]
+            lines.extend(f'  ["{a}"] = true,' for a in sorted(safe_addrs))
+            lines.append("}")
+            lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
+            lines.append("for _, w in ipairs(ws) do")
+            lines.append("  if targets[tostring(w.address)] then")
+            lines.append("    hl.dispatch(hl.dsp.focus({ window = w }))")
+            lines.append('    hl.dispatch(hl.dsp.window.float({ action = "toggle" }))')
+            lines.append("  end")
+            lines.append("end")
         try:
             self._ipc.eval_lua("\n".join(lines))
         except Exception as e:

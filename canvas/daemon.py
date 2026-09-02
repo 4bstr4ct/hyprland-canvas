@@ -92,6 +92,8 @@ class DaemonState:
         "PAN_STOP": "_handle_pan_stop",
         "NAV_LEFT": "_handle_nav_left",
         "NAV_RIGHT": "_handle_nav_right",
+        "NAV_UP": "_handle_nav_up",
+        "NAV_DOWN": "_handle_nav_down",
         "EDGE_START": "_handle_edge_start",
         "EDGE_STOP": "_handle_edge_stop",
         "TOGGLE": "_handle_toggle",
@@ -132,6 +134,14 @@ class DaemonState:
 
     def _handle_nav_right(self) -> str:
         self.navigator.navigate("right")
+        return "OK"
+
+    def _handle_nav_up(self) -> str:
+        self.navigator.navigate("up")
+        return "OK"
+
+    def _handle_nav_down(self) -> str:
+        self.navigator.navigate("down")
         return "OK"
 
     def _get_focused_window_address(self) -> str:
@@ -438,10 +448,12 @@ def run() -> None:
         grab_dead_zone=edge_cfg.get("grab_dead_zone", 5),
     )
 
+    canvas_cfg = cfg.get("canvas", {})
     navigator = Navigator(
         ipc=ipc,
         protected_apps=cfg["navigation"]["protected_apps"],
         cooldown=cfg["navigation"]["cooldown"],
+        preserve_geometry=bool(canvas_cfg.get("preserve_geometry", True)),
     )
 
     daemon_state = DaemonState(
