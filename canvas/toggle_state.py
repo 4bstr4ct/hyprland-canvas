@@ -14,6 +14,8 @@ import logging
 import os
 from typing import Any
 
+from canvas import debug
+
 log = logging.getLogger("canvas.toggle")
 
 Snapshot = dict[str, dict[str, list[int]]]
@@ -68,11 +70,24 @@ def load(path: str | None = None) -> State:
             except Exception:
                 continue
             state[ws_id] = _parse_snapshot(v)
+        if debug.enabled():
+            debug.dbg(
+                "STATE_LOAD",
+                path=file,
+                workspaces=sorted(state.keys()),
+                counts={ws: len(s) for ws, s in state.items()},
+            )
+            if debug.level() >= 2 and state:
+                debug.dbg2("STATE_LOAD_DETAIL", state=state)
         return state
     except FileNotFoundError:
+        if debug.enabled():
+            debug.dbg("STATE_LOAD", path=file, workspaces=[], counts={})
         return {}
     except Exception as e:
         log.warning("could not read toggle state %s: %s", file, e)
+        if debug.enabled():
+            debug.dbg("STATE_LOAD_ERROR", path=file, error=str(e))
         return {}
 
 
@@ -90,5 +105,16 @@ def save(state: State, path: str | None = None) -> None:
         with open(tmp, "w") as f:
             json.dump(serializable, f)
         os.replace(tmp, file)
+        if debug.enabled():
+            debug.dbg(
+                "STATE_SAVE",
+                path=file,
+                workspaces=sorted(state.keys()),
+                counts={ws: len(s) for ws, s in state.items()},
+            )
+            if debug.level() >= 2 and state:
+                debug.dbg2("STATE_SAVE_DETAIL", state=state)
     except Exception as e:
         log.warning("could not write toggle state %s: %s", file, e)
+        if debug.enabled():
+            debug.dbg("STATE_SAVE_ERROR", path=file, error=str(e))

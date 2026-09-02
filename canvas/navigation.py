@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any
 
-from canvas import toggle_state
+from canvas import debug, toggle_state
 from canvas.hypr import HyprIPC
 
 log = logging.getLogger("canvas.navigation")
@@ -47,14 +47,25 @@ class Navigator:
         # each entry also stores at/size to restore exact floating geometry.
         raw = toggle_state.load()
         self._canvas_mode_workspaces: dict[int, dict[str, dict[str, list[int]]]] = {}
+        migrated = False
         for ws, snap in raw.items():
             if isinstance(snap, list):
                 # Legacy format (list of addresses) — from mocked load in tests or old file
                 self._canvas_mode_workspaces[ws] = {str(a): {} for a in snap if isinstance(a, str)}
+                migrated = True
             elif isinstance(snap, dict):
                 self._canvas_mode_workspaces[ws] = dict(snap)
             else:
                 self._canvas_mode_workspaces[ws] = {}
+        if debug.enabled():
+            counts = {ws: len(s) for ws, s in self._canvas_mode_workspaces.items()}
+            debug.dbg(
+                "STATE_LOAD",
+                workspaces=sorted(raw.keys()),
+                counts=counts,
+                migrated=migrated,
+                preserve_geometry=self._preserve_geometry,
+            )
 
     @staticmethod
     def _window_center(w: dict[str, Any]) -> tuple[int, int]:
@@ -213,6 +224,16 @@ class Navigator:
         if workspace_id in self._canvas_mode_workspaces:
             snapshot = self._canvas_mode_workspaces.pop(workspace_id)
             self._persist_canvas_state()
+            if debug.enabled():
+                debug.dbg(
+                    "TOGGLE_OFF",
+                    ws=workspace_id,
+                    count=len(snapshot),
+                    addrs=sorted(snapshot.keys()),
+                )
+                if debug.level() >= 2:
+                    geos = {a: snapshot[a] for a in sorted(snapshot.keys())}
+                    debug.dbg2("TOGGLE_OFF_DETAIL", ws=workspace_id, geos=geos)
             if snapshot:
                 self._tile_windows(workspace_id, snapshot)
                 return "CANVAS_OFF"
@@ -223,6 +244,16 @@ class Navigator:
         tiled_snapshot = self._snapshot_tiled_windows(workspace_id)
         self._canvas_mode_workspaces[workspace_id] = tiled_snapshot
         self._persist_canvas_state()
+        if debug.enabled():
+            debug.dbg(
+                "TOGGLE_ON",
+                ws=workspace_id,
+                count=len(tiled_snapshot),
+                addrs=sorted(tiled_snapshot.keys()),
+                preserve_geometry=self._preserve_geometry,
+            )
+            if debug.level() >= 2 and tiled_snapshot:
+                debug.dbg2("TOGGLE_ON_DETAIL", ws=workspace_id, geos=tiled_snapshot)
         self._set_all_floating(workspace_id, floating=True)
         return "CANVAS_ON"
 
@@ -260,6 +291,7 @@ class Navigator:
             resp = self._ipc.send("j/clients")
             clients: list[dict[str, Any]] = json.loads(resp)
             snap: dict[str, dict[str, list[int]]] = {}
+            debug_details: dict[str, dict[str, Any]] = {} if debug.level() >= 2 else {}  # type: ignore[assignment]
             for w in clients:
                 if w.get("floating"):
                     continue
@@ -281,6 +313,25 @@ class Navigator:
                         snap[addr] = {}
                 else:
                     snap[addr] = {}
+                if debug.level() >= 2:
+                    at = w.get("at", [0, 0])
+                    size = w.get("size", [0, 0])
+                    debug_details[addr] = {
+                        "at": at,
+                        "size": size,
+                        "class": str(w.get("class", ""))[:40],
+                        "title": str(w.get("title", ""))[:40],
+                    }
+            if debug.enabled():
+                debug.dbg(
+                    "SNAPSHOT_CREATE",
+                    ws=workspace_id,
+                    count=len(snap),
+                    addrs=sorted(snap.keys()),
+                    preserve_geometry=self._preserve_geometry,
+                )
+                if debug.level() >= 2 and debug_details:
+                    debug.dbg2("SNAPSHOT_CREATE_DETAIL", ws=workspace_id, details=debug_details)
             return snap
         except Exception as e:
             log.warning("snapshot tiled windows failed: %s", e)
@@ -296,8 +347,35 @@ class Navigator:
         """
         safe_addrs = [a for a in snapshot if _VALID_ADDR.match(a)]
         if not safe_addrs:
+            if debug.enabled():
+                debug.dbg("TILE_START", ws=workspace_id, targets=0, addrs=[])
             return
         ws_id = _safe_int(workspace_id, "workspace_id")
+        if debug.enabled():
+            debug.dbg(
+                "TILE_START",
+                ws=workspace_id,
+                targets=len(safe_addrs),
+                addrs=sorted(safe_addrs),
+                saved_geos={a: snapshot.get(a, {}) for a in sorted(safe_addrs)},
+            )
+        if debug.level() >= 2:
+            try:
+                resp = self._ipc.send("j/clients")
+                clients: list[dict[str, Any]] = json.loads(resp)
+                live = {
+                    w["address"]: {
+                        "at": w.get("at"),
+                        "size": w.get("size"),
+                        "class": str(w.get("class", ""))[:30],
+                        "title": str(w.get("title", ""))[:30],
+                    }
+                    for w in clients
+                    if w.get("address") in snapshot
+                }
+                debug.dbg2("TILE_START_LIVE", ws=workspace_id, live=live)
+            except Exception as e:
+                debug.dbg2("TILE_START_LIVE_ERROR", ws=workspace_id, error=str(e))
         if self._preserve_geometry and any(snapshot.get(a, {}).get("at") for a in safe_addrs):
             # Geometry-aware restore: move+resize then toggle
             lines = ["local geos = {"]
@@ -340,10 +418,16 @@ class Navigator:
             lines.append('    hl.dispatch(hl.dsp.window.float({ action = "toggle" }))')
             lines.append("  end")
             lines.append("end")
+        if debug.enabled():
+            debug.dbg("TILE_LUA", ws=workspace_id, lines=len(lines), preview="; ".join(lines[:2]))
         try:
             self._ipc.eval_lua("\n".join(lines))
+            if debug.enabled():
+                debug.dbg("TILE_DONE", ws=workspace_id, targets=len(safe_addrs))
         except Exception as e:
             log.warning("tile windows failed: %s", e)
+            if debug.enabled():
+                debug.dbg("TILE_ERROR", ws=workspace_id, error=str(e))
 
     def _set_all_floating(self, workspace_id: int, floating: bool) -> None:
         """Make every currently-tiled window on the workspace floating (canvas ON).
@@ -355,6 +439,34 @@ class Navigator:
         try:
             ws_id = _safe_int(workspace_id, "workspace_id")
             fl = "false" if floating else "true"
+            if debug.enabled():
+                try:
+                    resp = self._ipc.send("j/clients")
+                    clients: list[dict[str, Any]] = json.loads(resp)
+                    tiled = [
+                        w for w in clients
+                        if not w.get("floating")
+                        and w.get("workspace", {}).get("id") == workspace_id
+                    ]
+                    debug.dbg(
+                        "FLOAT_START",
+                        ws=workspace_id,
+                        count=len(tiled),
+                        addrs=sorted([str(w.get("address", "")) for w in tiled]),
+                    )
+                    if debug.level() >= 2 and tiled:
+                        details = {
+                            str(w["address"]): {
+                                "at": w.get("at"),
+                                "size": w.get("size"),
+                                "class": str(w.get("class", ""))[:30],
+                            }
+                            for w in tiled
+                            if w.get("address")
+                        }
+                        debug.dbg2("FLOAT_START_DETAIL", ws=workspace_id, details=details)
+                except Exception:
+                    pass
             lua = (
                 f"local ws = hl.get_windows({{ floating = {fl}, "
                 f"workspace = {ws_id} }}) "
@@ -363,8 +475,12 @@ class Navigator:
                 f'hl.dispatch(hl.dsp.window.float({{ action = "toggle" }})) end'
             )
             self._ipc.eval_lua(lua)
+            if debug.enabled():
+                debug.dbg("FLOAT_DONE", ws=workspace_id, floating=floating)
         except Exception as e:
             log.warning("set_all_floating failed: %s", e)
+            if debug.enabled():
+                debug.dbg("FLOAT_ERROR", ws=workspace_id, error=str(e))
 
     def _is_protected(self, window: dict[str, Any]) -> bool:
         """Check if window class matches a protected app."""
