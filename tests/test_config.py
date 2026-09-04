@@ -169,21 +169,34 @@ def test_load_valid_partial_config_passes():
 
 
 def test_toggle_state_roundtrip(tmp_path):
+    from canvas.toggle_state import FORMAT_VERSION
     from canvas.toggle_state import load as ts_load
     from canvas.toggle_state import save as ts_save
 
     file = str(tmp_path / "toggle.json")
     state = {
-        1: {"0xabc": {"at": [10, 20], "size": [500, 300]}, "0x2": {}},
-        7: {"0xfff": {"at": [0, 0], "size": [100, 100]}},
+        1: {
+            "tiled": {"0xabc": {"at": [10, 20], "size": [500, 300]}, "0x2": {}},
+            "floating": {"0xabc": {"at": [11, 21], "size": [500, 300]}},
+        },
+        7: {
+            "tiled": {"0xfff": {"at": [0, 0], "size": [100, 100]}},
+            "floating": {},
+        },
     }
     ts_save(state, path=file)
     loaded = ts_load(path=file)
     assert loaded == state
 
+    import json
+
+    with open(file) as f:
+        raw = json.load(f)
+    assert raw["_v"] == FORMAT_VERSION
+
 
 def test_toggle_state_roundtrip_legacy_list(tmp_path):
-    """Old list format is migrated to dict with empty geometry."""
+    """Old list format migrates to tiled-only, floating stays empty."""
     from canvas.toggle_state import load as ts_load
 
     file = str(tmp_path / "toggle.json")
@@ -193,8 +206,25 @@ def test_toggle_state_roundtrip_legacy_list(tmp_path):
     with open(file, "w") as f:
         json.dump({"1": ["0xabc", "0x2"], "7": ["0xfff"]}, f)
     loaded = ts_load(path=file)
-    assert set(loaded[1].keys()) == {"0xabc", "0x2"}
-    assert set(loaded[7].keys()) == {"0xfff"}
+    assert set(loaded[1]["tiled"].keys()) == {"0xabc", "0x2"}
+    assert loaded[1]["floating"] == {}
+    assert set(loaded[7]["tiled"].keys()) == {"0xfff"}
+
+
+def test_toggle_state_migrates_v1_dict_dropping_geos(tmp_path):
+    """v1 files (addr->tiled geo, no _v) keep addresses, drop stale geos."""
+    from canvas.toggle_state import load as ts_load
+
+    file = str(tmp_path / "toggle.json")
+    import json
+
+    with open(file, "w") as f:
+        json.dump({"1": {"0xabc": {"at": [10, 20], "size": [500, 300]}}}, f)
+    loaded = ts_load(path=file)
+    # Address kept for OFF targeting, geometry dropped (was tiled slots)
+    assert set(loaded[1]["tiled"].keys()) == {"0xabc"}
+    assert loaded[1]["tiled"]["0xabc"] == {}
+    assert loaded[1]["floating"] == {}
 
 
 def test_toggle_state_load_missing_file(tmp_path):

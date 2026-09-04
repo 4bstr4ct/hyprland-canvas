@@ -158,7 +158,9 @@ navigation:
     - chromium
     - firefox
 canvas:
-  preserve_geometry: true     # remember tiled window positions/sizes for exact restore
+  preserve_geometry: true     # remember floating window positions/sizes on OFF,
+                              # restore them on the next ON; tiled placement itself
+                              # is always layout-owned
 ```
 
 Invalid values (wrong type, zero/negative numbers) are rejected at daemon startup with the exact offending keys listed on stderr.

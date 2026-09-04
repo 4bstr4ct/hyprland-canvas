@@ -29,4 +29,5 @@ edge_scroll:
   # max_speed: 30              # optional: cap per-frame edge-scroll delta (pixels)
 
 canvas:
-  preserve_geometry: true      # remember tiled window geometry for exact toggle restore
+  preserve_geometry: true      # remember floating geometry on OFF, restore on next ON
+                               # (tiled placement itself is always layout-owned)

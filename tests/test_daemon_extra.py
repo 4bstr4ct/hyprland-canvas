@@ -229,3 +229,40 @@ def test_pan_start_cancels_active_edge_session():
 
     assert ds.edge_scroll.active is False
     assert ds.panning.pan_active is True
+
+
+def test_handle_ipc_canvas_toggle_stops_competing_modes():
+    """Canvas-toggle during pan/edge stops both so Lua outcome is deterministic."""
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+    ds.baselines = {"0x1": (10, 20)}
+    ds.baseline_workspace = 1
+    ds.edge_scroll.start(
+        EdgeScrollParams(
+            dragged_addr="0xabc",
+            win_x=100,
+            win_y=200,
+            win_w=500,
+            win_h=300,
+            cursor_x=350,
+            cursor_y=350,
+        )
+    )
+
+    ds.handle_ipc("CANVAS_TOGGLE")
+
+    assert ds.panning.is_dragging is False
+    assert ds.baselines == {}
+    assert ds.baseline_workspace is None
+    assert ds.edge_scroll.active is False
+    ds.navigator.canvas_toggle.assert_called_once()
+
+
+def test_handle_ipc_canvas_toggle_single_stops_pan():
+    ds = _make_daemon_state()
+    ds.panning.start_pan()
+
+    ds.handle_ipc("CANVAS_TOGGLE_SINGLE")
+
+    assert ds.panning.is_dragging is False
+    ds.navigator.canvas_toggle_single.assert_called_once()

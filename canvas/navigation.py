@@ -43,27 +43,42 @@ class Navigator:
         self._preserve_geometry = preserve_geometry
         self._last_nav_time = 0.0
         # workspace id -> snapshot of TILED windows before canvas ON.
-        # Only these are tiled again on OFF. When preserve_geometry is true,
-        # each entry also stores at/size to restore exact floating geometry.
-        raw = toggle_state.load()
+        # Only these are tiled again on OFF, so windows that were already
+        # floating before canvas mode survive.
+        # workspace id -> last known FLOATING geometry per address.
+        # Reapplied on the next ON so the canvas comes back where it was.
         self._canvas_mode_workspaces: dict[int, dict[str, dict[str, list[int]]]] = {}
-        migrated = False
-        for ws, snap in raw.items():
-            if isinstance(snap, list):
-                # Legacy format (list of addresses) — from mocked load in tests or old file
-                self._canvas_mode_workspaces[ws] = {str(a): {} for a in snap if isinstance(a, str)}
-                migrated = True
-            elif isinstance(snap, dict):
-                self._canvas_mode_workspaces[ws] = dict(snap)
+        self._floating_geos: dict[int, dict[str, dict[str, list[int]]]] = {}
+        raw = toggle_state.load()
+        for ws, sections in raw.items():
+            if isinstance(sections, list):
+                # Legacy mocked load in tests: bare address list = tiled set
+                self._canvas_mode_workspaces[ws] = {
+                    str(a): {} for a in sections if isinstance(a, str)
+                }
+            elif isinstance(sections, dict) and ("tiled" in sections or "floating" in sections):
+                tiled = sections.get("tiled", {})
+                floating = sections.get("floating", {})
+                if isinstance(tiled, dict) and tiled:
+                    self._canvas_mode_workspaces[ws] = dict(tiled)
+                if isinstance(floating, dict) and floating:
+                    self._floating_geos[ws] = dict(floating)
+            elif isinstance(sections, dict):
+                # Legacy v1 dict (addr->geo of tiled slots): keep addresses
+                # for targeting, drop geometry (tiled slots are layout-owned).
+                addrs: dict[str, dict[str, list[int]]] = {
+                    a: {} for a in sections if isinstance(a, str)
+                }
+                if addrs:
+                    self._canvas_mode_workspaces[ws] = addrs
             else:
                 self._canvas_mode_workspaces[ws] = {}
         if debug.enabled():
-            counts = {ws: len(s) for ws, s in self._canvas_mode_workspaces.items()}
             debug.dbg2(
                 "STATE_LOAD",
                 workspaces=sorted(raw.keys()),
-                counts=counts,
-                migrated=migrated,
+                tiled={ws: len(s) for ws, s in self._canvas_mode_workspaces.items()},
+                floating={ws: len(s) for ws, s in self._floating_geos.items()},
                 preserve_geometry=self._preserve_geometry,
             )
 
@@ -210,7 +225,14 @@ class Navigator:
         self._pan_to_window(floating_updated, target_addr, center_x, center_y, workspace_id)
 
     def _persist_canvas_state(self) -> None:
-        toggle_state.save(self._canvas_mode_workspaces)
+        workspaces = set(self._canvas_mode_workspaces) | set(self._floating_geos)
+        state: dict[int, dict[str, dict[str, dict[str, list[int]]]]] = {}
+        for ws in workspaces:
+            tiled = self._canvas_mode_workspaces.get(ws, {})
+            floating = self._floating_geos.get(ws, {})
+            if tiled or floating:
+                state[ws] = {"tiled": dict(tiled), "floating": dict(floating)}
+        toggle_state.save(state)
 
     def canvas_toggle(self) -> str:
         # Backward-compat alias — single word `canvas-toggle` still means "all"
@@ -223,6 +245,15 @@ class Navigator:
 
         if workspace_id in self._canvas_mode_workspaces:
             snapshot = self._canvas_mode_workspaces.pop(workspace_id)
+            # Capture where the floating windows actually are BEFORE tiling:
+            # this is the geometry the next ON restores. Tiled slots are
+            # layout-owned and must never be applied as floating positions.
+            if self._preserve_geometry and snapshot:
+                captured = self._snapshot_floating_geos(workspace_id, set(snapshot.keys()))
+                if captured:
+                    self._floating_geos[workspace_id] = captured
+            elif not self._preserve_geometry:
+                self._floating_geos.pop(workspace_id, None)
             self._persist_canvas_state()
             if debug.enabled():
                 debug.dbg2(
@@ -255,6 +286,7 @@ class Navigator:
             if debug.level() >= 2 and tiled_snapshot:
                 debug.dbg2("TOGGLE_ON_DETAIL", ws=workspace_id, geos=tiled_snapshot)
         self._set_all_floating(workspace_id, floating=True)
+        self._restore_floating_geos(workspace_id)
         return "CANVAS_ON"
 
     def canvas_toggle_single(self) -> str:
@@ -267,11 +299,11 @@ class Navigator:
         was_floating = bool(focused.get("floating"))
         try:
             lua = (
-                f'local w = nil\n'
-                f'for _, win in ipairs(hl.get_windows({{}})) do\n'
+                f"local w = nil\n"
+                f"for _, win in ipairs(hl.get_windows({{}})) do\n"
                 f'  if tostring(win.address) == "{addr}" then w = win; break end\n'
-                f'end\n'
-                f'if w then hl.dispatch(hl.dsp.window.float({{'
+                f"end\n"
+                f"if w then hl.dispatch(hl.dsp.window.float({{"
                 f' action = "toggle", window = w }})) end'
             )
             self._ipc.eval_lua(lua)
@@ -280,12 +312,12 @@ class Navigator:
             return "ERROR:TOGGLE_FAILED"
         return "TILED" if was_floating else "FLOATED"
 
-    def _snapshot_tiled_windows(
-        self, workspace_id: int
-    ) -> dict[str, dict[str, list[int]]]:
+    def _snapshot_tiled_windows(self, workspace_id: int) -> dict[str, dict[str, list[int]]]:
         """Snapshot of currently tiled windows on the workspace (pre-canvas state).
 
-        When preserve_geometry is true, each entry stores at/size for exact restore.
+        When preserve_geometry is true, each entry stores at/size. Tiled
+        coordinates are informational only (placement is layout-owned) and
+        feed the row-major toggle order in _tile_windows.
         """
         try:
             resp = self._ipc.send("j/clients")
@@ -337,16 +369,159 @@ class Navigator:
             log.warning("snapshot tiled windows failed: %s", e)
             return {}
 
-    def _tile_windows(
-        self, workspace_id: int, snapshot: dict[str, dict[str, list[int]]]
-    ) -> None:
+    def _snapshot_floating_geos(
+        self, workspace_id: int, addresses: set[str]
+    ) -> dict[str, dict[str, list[int]]]:
+        """Capture current FLOATING geometry for the given addresses.
+
+        Unlike tiled slots (layout-owned), floating positions are
+        authoritative — move/resize applies them exactly. These are the
+        coordinates the next canvas ON restores.
+        """
+        try:
+            resp = self._ipc.send("j/clients")
+            clients: list[dict[str, Any]] = json.loads(resp)
+            geos: dict[str, dict[str, list[int]]] = {}
+            for w in clients:
+                if not w.get("floating"):
+                    continue
+                addr = w.get("address")
+                if not isinstance(addr, str) or addr not in addresses:
+                    continue
+                wsw = w.get("workspace")
+                if not isinstance(wsw, dict) or wsw.get("id") != workspace_id:
+                    continue
+                at = w.get("at", [0, 0])
+                size = w.get("size", [0, 0])
+                try:
+                    geos[addr] = {
+                        "at": [int(at[0]), int(at[1])],
+                        "size": [int(size[0]), int(size[1])],
+                    }
+                except Exception:
+                    continue
+            if debug.enabled():
+                debug.dbg2(
+                    "FLOATING_SNAPSHOT",
+                    ws=workspace_id,
+                    count=len(geos),
+                    addrs=sorted(geos.keys()),
+                    geos=geos,
+                )
+            return geos
+        except Exception as e:
+            log.warning("snapshot floating geos failed: %s", e)
+            return {}
+
+    def _restore_floating_geos(self, workspace_id: int) -> None:
+        """Move newly floated snapshot windows to stored floating geometry.
+
+        Runs after _set_all_floating so the windows are floating (and the
+        move/resize dispatches actually stick).
+        """
+        if not self._preserve_geometry:
+            return
+        stored = self._floating_geos.get(workspace_id, {})
+        if not stored:
+            return
+        try:
+            resp = self._ipc.send("j/clients")
+            clients: list[dict[str, Any]] = json.loads(resp)
+            live = {
+                str(w.get("address"))
+                for w in clients
+                if w.get("floating")
+                and isinstance(w.get("workspace"), dict)
+                and w.get("workspace", {}).get("id") == workspace_id
+            }
+        except Exception as e:
+            log.warning("restore floating geos failed: %s", e)
+            return
+        targets: dict[str, dict[str, list[int]]] = {}
+        for addr in sorted(stored):
+            if addr not in live or not _VALID_ADDR.match(addr):
+                continue
+            geo = stored[addr]
+            if not isinstance(geo, dict):
+                continue
+            try:
+                at = [int(geo.get("at", [0, 0])[0]), int(geo.get("at", [0, 0])[1])]
+                size = [int(geo.get("size", [0, 0])[0]), int(geo.get("size", [0, 0])[1])]
+            except Exception:
+                continue
+            if at == [0, 0] and size == [0, 0]:
+                continue
+            targets[addr] = {"at": at, "size": size}
+        if not targets:
+            return
+        lines = ["local geos = {"]
+        for addr, geo in targets.items():
+            ax, ay = geo["at"]
+            sw, sh = geo["size"]
+            lines.append(f'  ["{addr}"] = {{at={{{ax},{ay}}}, size={{{sw},{sh}}}}},')
+        lines.append("}")
+        lines.append(
+            f"local ws = hl.get_windows({{ floating = true, "
+            f"workspace = {_safe_int(workspace_id, 'workspace_id')} }})"
+        )
+        lines.append("for _, w in ipairs(ws) do")
+        lines.append("  local g = geos[tostring(w.address)]")
+        lines.append("  if g then")
+        lines.append(
+            "    hl.dispatch(hl.dsp.window.move({"
+            " x = g.at[1], y = g.at[2], relative = false, window = w }))"
+        )
+        lines.append(
+            "    hl.dispatch(hl.dsp.window.resize({"
+            " width = g.size[1], height = g.size[2], window = w }))"
+        )
+        lines.append("  end")
+        lines.append("end")
+        if debug.enabled():
+            debug.dbg2(
+                "FLOAT_RESTORE",
+                ws=workspace_id,
+                count=len(targets),
+                applied={a: targets[a] for a in sorted(targets)},
+            )
+        try:
+            self._ipc.eval_lua("\n".join(lines))
+        except Exception as e:
+            log.warning("restore floating geos failed: %s", e)
+
+    @staticmethod
+    def _toggle_order(snapshot: dict[str, dict[str, list[int]]]) -> list[str]:
+        """Order snapshot addresses for tiling: row-major by saved position.
+
+        The compositor rebuilds the tiled layout in toggle order, so feeding
+        top-to-bottom, left-to-right approximates the original grid. Entries
+        without usable coordinates fall back to plain address order.
+        """
+        positioned: list[tuple[int, int, str]] = []
+        plain: list[str] = []
+        for addr in snapshot:
+            if not _VALID_ADDR.match(addr):
+                continue
+            geo = snapshot.get(addr, {})
+            at = geo.get("at") if isinstance(geo, dict) else None
+            try:
+                y, x = int(at[1]), int(at[0])  # type: ignore[index]
+                positioned.append((y, x, addr))
+            except Exception:
+                plain.append(addr)
+        positioned.sort()
+        return [a for _, _, a in positioned] + sorted(plain)
+
+    def _tile_windows(self, workspace_id: int, snapshot: dict[str, dict[str, list[int]]]) -> None:
         """Tile exactly the windows recorded in the snapshot, leaving others floating.
 
-        When geometry was preserved, moves/resizes each floating window to its
-        saved at/size before toggling it tiled (mirrors v2's restore path).
+        Plain per-window toggle: tiled placement is layout-owned, so no
+        move/resize is attempted here (it would be discarded by the layout
+        anyway). Floating geometry is preserved separately and reapplied on
+        the next ON.
         """
-        safe_addrs = [a for a in snapshot if _VALID_ADDR.match(a)]
-        if not safe_addrs:
+        ordered = self._toggle_order(snapshot)
+        if not ordered:
             if debug.enabled():
                 debug.dbg2("TILE_START", ws=workspace_id, targets=0, addrs=[])
             return
@@ -355,9 +530,8 @@ class Navigator:
             debug.dbg2(
                 "TILE_START",
                 ws=workspace_id,
-                targets=len(safe_addrs),
-                addrs=sorted(safe_addrs),
-                saved_geos={a: snapshot.get(a, {}) for a in sorted(safe_addrs)},
+                targets=len(ordered),
+                order=ordered,
             )
         if debug.level() >= 2:
             try:
@@ -376,54 +550,24 @@ class Navigator:
                 debug.dbg2("TILE_START_LIVE", ws=workspace_id, live=live)
             except Exception as e:
                 debug.dbg2("TILE_START_LIVE_ERROR", ws=workspace_id, error=str(e))
-        if self._preserve_geometry and any(snapshot.get(a, {}).get("at") for a in safe_addrs):
-            # Geometry-aware restore: move+resize then toggle
-            lines = ["local geos = {"]
-            for addr in sorted(safe_addrs):
-                geo = snapshot.get(addr, {})
-                at = geo.get("at", [0, 0])
-                size = geo.get("size", [0, 0])
-                try:
-                    ax, ay = int(at[0]), int(at[1])
-                    sw, sh = int(size[0]), int(size[1])
-                except Exception:
-                    ax, ay, sw, sh = 0, 0, 0, 0
-                lines.append(f'  ["{addr}"] = {{at={{{ax},{ay}}}, size={{{sw},{sh}}}}},')
-            lines.append("}")
-            lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
-            lines.append("for _, w in ipairs(ws) do")
-            lines.append("  local g = geos[tostring(w.address)]")
-            lines.append("  if g then")
-            lines.append(
-                "    hl.dispatch(hl.dsp.window.move({"
-                " x=g.at[1], y=g.at[2], relative=false, window=w }))"
-            )
-            lines.append(
-                "    hl.dispatch(hl.dsp.window.resize({"
-                " width=g.size[1], height=g.size[2], window=w }))"
-            )
-            lines.append(
-                "    hl.dispatch(hl.dsp.window.float({ action = \"toggle\", window = w }))"
-            )
-            lines.append("  end")
-            lines.append("end")
-        else:
-            lines = ["local targets = {"]
-            lines.extend(f'  ["{a}"] = true,' for a in sorted(safe_addrs))
-            lines.append("}")
-            lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
-            lines.append("for _, w in ipairs(ws) do")
-            lines.append("  if targets[tostring(w.address)] then")
-            lines.append("    hl.dispatch(hl.dsp.focus({ window = w }))")
-            lines.append('    hl.dispatch(hl.dsp.window.float({ action = "toggle" }))')
-            lines.append("  end")
-            lines.append("end")
+        lines = ["local order = {"]
+        lines.extend(f'  "{a}",' for a in ordered)
+        lines.append("}")
+        lines.append(f"local ws = hl.get_windows({{ floating = true, workspace = {ws_id} }})")
+        lines.append("for _, addr in ipairs(order) do")
+        lines.append("  for _, w in ipairs(ws) do")
+        lines.append("    if tostring(w.address) == addr then")
+        lines.append('      hl.dispatch(hl.dsp.window.float({ action = "toggle", window = w }))')
+        lines.append("      break")
+        lines.append("    end")
+        lines.append("  end")
+        lines.append("end")
         if debug.enabled():
             debug.dbg2("TILE_LUA", ws=workspace_id, lines=len(lines), preview="; ".join(lines[:2]))
         try:
             self._ipc.eval_lua("\n".join(lines))
             if debug.enabled():
-                debug.dbg2("TILE_DONE", ws=workspace_id, targets=len(safe_addrs))
+                debug.dbg2("TILE_DONE", ws=workspace_id, targets=len(ordered))
         except Exception as e:
             log.warning("tile windows failed: %s", e)
             if debug.enabled():
@@ -444,7 +588,8 @@ class Navigator:
                     resp = self._ipc.send("j/clients")
                     clients: list[dict[str, Any]] = json.loads(resp)
                     tiled = [
-                        w for w in clients
+                        w
+                        for w in clients
                         if not w.get("floating")
                         and w.get("workspace", {}).get("id") == workspace_id
                     ]

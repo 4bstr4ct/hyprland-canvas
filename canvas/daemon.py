@@ -279,13 +279,33 @@ class DaemonState:
         self.panning.inverted = not self.panning.inverted
         return "INVERTED" if self.panning.inverted else "NORMAL"
 
+    def _stop_competing_modes(self, to: str) -> None:
+        """Stop pan/edge sessions before a canvas-toggle.
+
+        A live pan keeps applying baseline+delta moves to floating windows,
+        which would fight the toggle Lua dispatched right after (same
+        windows, absolute writes, one frame apart). Clearing first makes
+        the toggle outcome deterministic.
+        """
+        if self.panning.is_dragging:
+            self.panning.stop_pan()
+            self.baselines = {}
+            self.baseline_workspace = None
+            debug.dbg2("MODE_SWITCH", to=to, stopped="pan")
+        if self.edge_scroll.active:
+            self.edge_scroll.stop()
+            debug.dbg2("MODE_SWITCH", to=to, stopped="edge")
+
     def _handle_canvas_toggle(self) -> str:
+        self._stop_competing_modes("canvas-toggle")
         return self.navigator.canvas_toggle()
 
     def _handle_canvas_toggle_all(self) -> str:
+        self._stop_competing_modes("canvas-toggle")
         return self.navigator.canvas_toggle_all()
 
     def _handle_canvas_toggle_single(self) -> str:
+        self._stop_competing_modes("canvas-toggle")
         return self.navigator.canvas_toggle_single()
 
     def _handle_ping(self) -> str:

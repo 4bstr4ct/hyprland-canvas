@@ -232,3 +232,130 @@ def test_canvas_toggle_after_restart_is_safe():
         lua = ipc.eval_lua.call_args[0][0]
         assert '"0x1"' in lua
         assert '"0x9"' not in lua
+
+
+def test_canvas_toggle_off_captures_floating_geos():
+    """OFF snapshots current floating positions for the next ON restore."""
+    pre_canvas = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    during_canvas = [
+        _make_window("kitty", "0x1", 500, 600, 400, 300, floating=True),
+    ]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(pre_canvas)
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save") as msave,
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+
+            ipc.send.return_value = json.dumps(during_canvas)
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+        assert nav._floating_geos[1]["0x1"] == {"at": [500, 600], "size": [400, 300]}
+        saved = msave.call_args[0][0]
+        assert saved[1]["floating"]["0x1"] == {"at": [500, 600], "size": [400, 300]}
+        # OFF itself never moves windows — plain toggle only
+        off_lua = ipc.eval_lua.call_args[0][0]
+        assert "hl.dsp.window.move" not in off_lua
+        assert "hl.dsp.window.resize" not in off_lua
+
+
+def test_canvas_toggle_on_restores_floating_geos():
+    """ON moves newly floated windows back to stored floating positions."""
+    tiled = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    floated = [
+        _make_window("kitty", "0x1", 10, 10, 100, 100, floating=True),
+    ]
+    stored = {
+        1: {
+            "tiled": {},
+            "floating": {"0x1": {"at": [500, 600], "size": [400, 300]}},
+        }
+    }
+    ipc = MagicMock()
+    ipc.send.side_effect = [json.dumps(tiled), json.dumps(floated)]
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value=stored),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+
+        assert ipc.eval_lua.call_count == 2
+        restore_lua = ipc.eval_lua.call_args_list[1][0][0]
+        assert "at={500,600}" in restore_lua
+        assert "size={400,300}" in restore_lua
+        assert "hl.dsp.window.move" in restore_lua
+        assert "hl.dsp.window.resize" in restore_lua
+
+
+def test_canvas_toggle_on_without_stored_geos_skips_restore():
+    """ON with no stored floating geometry issues only the float toggle."""
+    tiled = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(tiled)
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+
+        assert ipc.eval_lua.call_count == 1
+
+
+def test_tile_order_is_row_major():
+    """Toggle order follows saved (y, x); entries without coords go last."""
+    nav = Navigator(ipc=MagicMock(), protected_apps=[], cooldown=0.0)
+    snapshot = {
+        "0xb": {"at": [0, 500], "size": [100, 100]},
+        "0xa": {"at": [500, 0], "size": [100, 100]},
+        "0x9": {"at": [0, 0], "size": [100, 100]},
+        "0xc": {},
+    }
+    nav._tile_windows(1, snapshot)
+
+    import re
+
+    lua = nav._ipc.eval_lua.call_args[0][0]
+    order = re.findall(r'"(0x[0-9a-fA-F]+)",', lua.split("local order", 1)[1])
+    assert order == ["0x9", "0xa", "0xb", "0xc"]
+
+
+def test_preserve_geometry_false_skips_capture_and_restore():
+    """Flag off: snapshots stay address-only, no floating geo traffic."""
+    tiled = [
+        _make_window("kitty", "0x1", 0, 0, 100, 100, floating=False),
+    ]
+    during = [
+        _make_window("kitty", "0x1", 500, 600, 400, 300, floating=True),
+    ]
+    ipc = MagicMock()
+    ipc.send.return_value = json.dumps(tiled)
+
+    with (
+        patch("canvas.navigation.toggle_state.load", return_value={}),
+        patch("canvas.navigation.toggle_state.save"),
+    ):
+        nav = Navigator(ipc=ipc, protected_apps=[], cooldown=0.0, preserve_geometry=False)
+        with patch.object(nav, "_get_active_workspace_id", return_value=1):
+            assert nav.canvas_toggle() == "CANVAS_ON"
+            assert nav._canvas_mode_workspaces[1] == {"0x1": {}}
+
+            ipc.send.return_value = json.dumps(during)
+            assert nav.canvas_toggle() == "CANVAS_OFF"
+
+        assert nav._floating_geos == {}
